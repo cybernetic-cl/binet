@@ -1,0 +1,3189 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0c0c0f" />
+  <title>BINET | Comunicación Interna</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <style>html,body,#root{width:100%;height:100%;margin:0;background:#0c0c0f}@media (min-width:900px){body{background:radial-gradient(circle at top,rgba(108,99,255,.12),#0c0c0f 42%)}}</style>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel" data-presets="env,react">
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+/* ── FONT INJECTION ─────────────────────────────────────── */
+(() => {
+  if (document.getElementById("nexus-font")) return;
+  const l = document.createElement("link");
+  l.id = "nexus-font";
+  l.rel = "stylesheet";
+  l.href = "https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap";
+  document.head.appendChild(l);
+  const s = document.createElement("style");
+  s.id = "nexus-styles";
+  s.textContent = `
+    *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+    :root{
+      --bg:#0c0c0f; --bg2:#131318; --bg3:#1a1a22; --bg4:#22222e;
+      --surface:#1e1e28; --surface2:#252532; --surface3:#2d2d3d;
+      --border:#2a2a38; --border2:#363648;
+      --accent:#6c63ff; --accent2:#8b84ff; --accent3:#4a42dd;
+      --accent-g:linear-gradient(135deg,#6c63ff,#a78bfa);
+      --green:#22c55e; --green2:#16a34a;
+      --orange:#f59e0b; --orange2:#d97706;
+      --red:#ef4444; --red2:#dc2626;
+      --blue:#3b82f6; --blue2:#2563eb;
+      --pink:#ec4899; --pink2:#db2777;
+      --text:#f1f1f8; --text2:#a8a8c0; --text3:#606078;
+      --radius:16px; --radius-sm:10px; --radius-xs:6px;
+      --shadow:0 8px 32px rgba(0,0,0,.6);
+      --shadow-sm:0 2px 12px rgba(0,0,0,.4);
+    }
+    body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);overflow:hidden}
+    input,textarea,select{font-family:'DM Sans',sans-serif;color:var(--text);background:transparent;border:none;outline:none}
+    button{font-family:'DM Sans',sans-serif;cursor:pointer;border:none;background:none}
+    textarea{resize:none}
+    ::-webkit-scrollbar{width:3px;height:3px}
+    ::-webkit-scrollbar-track{background:transparent}
+    ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
+    .scroll{overflow-y:auto}
+    @keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+    @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+    @keyframes slideRight{from{opacity:0;transform:translateX(-16px)}to{opacity:1;transform:translateX(0)}}
+    @keyframes slideUp{from{opacity:0;transform:translateY(100%)}to{opacity:1;transform:translateY(0)}}
+    @keyframes pop{from{opacity:0;transform:scale(.85)}to{opacity:1;transform:scale(1)}}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+@keyframes typing-dot{0%,60%,100%{transform:translateY(0);opacity:.4}30%{transform:translateY(-4px);opacity:1}}
+.typing-dot:nth-child(1){animation:typing-dot .9s infinite .0s}
+.typing-dot:nth-child(2){animation:typing-dot .9s infinite .15s}
+.typing-dot:nth-child(3){animation:typing-dot .9s infinite .3s}
+    @keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+    @keyframes xpGrow{from{width:0}to{width:var(--target)}}
+    @keyframes notifIn{from{opacity:0;transform:translateY(-60px) scale(.9)}to{opacity:1;transform:translateY(0) scale(1)}}
+    @keyframes badgePop{0%{transform:scale(0) rotate(-20deg)}70%{transform:scale(1.15) rotate(5deg)}100%{transform:scale(1) rotate(0)}}
+    .fade-up{animation:fadeUp .3s ease-out}
+    .pop{animation:pop .25s ease-out}
+    .slide-right{animation:slideRight .25s ease-out}
+    .msg-in{animation:fadeUp .2s ease-out}
+  `;
+  document.head.appendChild(s);
+})();
+
+
+/* ── SOUND ENGINE ────────────────────────────────────────── */
+// Web Audio API — generates all sounds procedurally, no files needed
+const AudioCtx = typeof window !== "undefined" ? (window.AudioContext || window.webkitAudioContext) : null;
+let _audioCtx = null;
+let _soundEnabled = true;
+let _soundVolume = 0.5; // 0.0 - 1.0
+
+function getAudioCtx() {
+  if (!_audioCtx && AudioCtx) _audioCtx = new AudioCtx();
+  return _audioCtx;
+}
+
+function playSound(type) {
+  if (!_soundEnabled) return;
+  try {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    // Resume if suspended (browser autoplay policy)
+    if (ctx.state === "suspended") ctx.resume();
+
+    const gain = ctx.createGain();
+    gain.connect(ctx.destination);
+    gain.gain.setValueAtTime(0, ctx.currentTime);
+
+    switch(type) {
+      case "message_send": {
+        // Soft click — short high beep
+        const o = ctx.createOscillator();
+        o.connect(gain);
+        o.type = "sine";
+        o.frequency.setValueAtTime(880, ctx.currentTime);
+        o.frequency.exponentialRampToValueAtTime(660, ctx.currentTime + 0.08);
+        gain.gain.setValueAtTime(_soundVolume * 0.3, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.12);
+        o.start(ctx.currentTime);
+        o.stop(ctx.currentTime + 0.13);
+        break;
+      }
+      case "message_receive": {
+        // Two-tone gentle ping (WhatsApp style)
+        [0, 0.1].forEach((delay, i) => {
+          const o = ctx.createOscillator();
+          o.connect(gain);
+          o.type = "sine";
+          o.frequency.setValueAtTime(i === 0 ? 520 : 660, ctx.currentTime + delay);
+          gain.gain.setValueAtTime(_soundVolume * 0.25, ctx.currentTime + delay);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + delay + 0.18);
+          o.start(ctx.currentTime + delay);
+          o.stop(ctx.currentTime + delay + 0.2);
+        });
+        break;
+      }
+      case "notification": {
+        // Triple soft ding
+        [0, 0.13, 0.26].forEach((delay, i) => {
+          const o = ctx.createOscillator();
+          o.connect(gain);
+          o.type = "triangle";
+          o.frequency.setValueAtTime([440, 554, 659][i], ctx.currentTime + delay);
+          gain.gain.setValueAtTime(_soundVolume * 0.3, ctx.currentTime + delay);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + delay + 0.22);
+          o.start(ctx.currentTime + delay);
+          o.stop(ctx.currentTime + delay + 0.25);
+        });
+        break;
+      }
+      case "task_complete": {
+        // Victory jingle — ascending chord
+        [0, 0.1, 0.2, 0.35].forEach((delay, i) => {
+          const o = ctx.createOscillator();
+          o.connect(gain);
+          o.type = "sine";
+          o.frequency.setValueAtTime([523, 659, 784, 1047][i], ctx.currentTime + delay);
+          gain.gain.setValueAtTime(_soundVolume * 0.35, ctx.currentTime + delay);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + delay + 0.3);
+          o.start(ctx.currentTime + delay);
+          o.stop(ctx.currentTime + delay + 0.35);
+        });
+        break;
+      }
+      case "achievement": {
+        // Fanfare — triumphant ascending
+        const notes = [523, 659, 784, 659, 784, 1047];
+        const times = [0, 0.1, 0.2, 0.35, 0.45, 0.55];
+        notes.forEach((freq, i) => {
+          const o = ctx.createOscillator();
+          o.connect(gain);
+          o.type = i === notes.length-1 ? "sine" : "triangle";
+          o.frequency.setValueAtTime(freq, ctx.currentTime + times[i]);
+          gain.gain.setValueAtTime(_soundVolume * (i === notes.length-1 ? 0.45 : 0.3), ctx.currentTime + times[i]);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + times[i] + 0.25);
+          o.start(ctx.currentTime + times[i]);
+          o.stop(ctx.currentTime + times[i] + 0.3);
+        });
+        break;
+      }
+      case "task_assigned": {
+        // Alert — attention sound
+        const o = ctx.createOscillator();
+        o.connect(gain);
+        o.type = "sawtooth";
+        o.frequency.setValueAtTime(440, ctx.currentTime);
+        o.frequency.setValueAtTime(550, ctx.currentTime + 0.1);
+        gain.gain.setValueAtTime(_soundVolume * 0.2, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+        o.start(ctx.currentTime);
+        o.stop(ctx.currentTime + 0.28);
+        break;
+      }
+      case "login": {
+        // Welcome — warm chord
+        [0, 0.15, 0.3].forEach((delay, i) => {
+          const o = ctx.createOscillator();
+          o.connect(gain);
+          o.type = "sine";
+          o.frequency.setValueAtTime([392, 494, 587][i], ctx.currentTime + delay);
+          gain.gain.setValueAtTime(_soundVolume * 0.28, ctx.currentTime + delay);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + delay + 0.4);
+          o.start(ctx.currentTime + delay);
+          o.stop(ctx.currentTime + delay + 0.45);
+        });
+        break;
+      }
+      case "error": {
+        // Low buzz — error feedback
+        const o = ctx.createOscillator();
+        o.connect(gain);
+        o.type = "square";
+        o.frequency.setValueAtTime(180, ctx.currentTime);
+        o.frequency.exponentialRampToValueAtTime(120, ctx.currentTime + 0.15);
+        gain.gain.setValueAtTime(_soundVolume * 0.2, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18);
+        o.start(ctx.currentTime);
+        o.stop(ctx.currentTime + 0.2);
+        break;
+      }
+      case "level_up": {
+        // Level up — epic ascending scale
+        const lvNotes = [523, 587, 659, 698, 784, 880, 988, 1047];
+        lvNotes.forEach((freq, i) => {
+          const o = ctx.createOscillator();
+          o.connect(gain);
+          o.type = i >= 6 ? "sine" : "triangle";
+          o.frequency.setValueAtTime(freq, ctx.currentTime + i * 0.07);
+          gain.gain.setValueAtTime(_soundVolume * (i >= 6 ? 0.4 : 0.25), ctx.currentTime + i * 0.07);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.07 + 0.2);
+          o.start(ctx.currentTime + i * 0.07);
+          o.stop(ctx.currentTime + i * 0.07 + 0.25);
+        });
+        break;
+      }
+      default: break;
+    }
+  } catch(e) { /* silent fail */ }
+}
+
+// Expose controls globally for settings panel
+window.__BINET_SOUND__ = {
+  get enabled() { return _soundEnabled; },
+  set enabled(v) { _soundEnabled = v; },
+  get volume() { return _soundVolume; },
+  set volume(v) { _soundVolume = Math.max(0, Math.min(1, v)); },
+};
+
+/* ── THEME ────────────────────────────────────────────────── */
+const T = {
+  bg:"#0c0c0f", bg2:"#131318", bg3:"#1a1a22", bg4:"#22222e",
+  surface:"#1e1e28", surface2:"#252532", surface3:"#2d2d3d",
+  border:"#2a2a38", border2:"#363648",
+  accent:"#6c63ff", accent2:"#8b84ff", accent3:"#4a42dd",
+  green:"#22c55e", orange:"#f59e0b", red:"#ef4444",
+  blue:"#3b82f6", pink:"#ec4899", teal:"#14b8a6",
+  text:"#f1f1f8", text2:"#a8a8c0", text3:"#606078",
+};
+
+/* ── SEED DATA ───────────────────────────────────────────── */
+/* ── AUTH REGISTRY ─────────────────────────────────────── */
+// This is the credential store. Admin can add/edit entries.
+// Each entry: { id, username, password, employeeId (links to USERS) }
+let AUTH_REGISTRY = [
+  {id:"auth_admin", username:"rich", password:"Cy207980", employeeId:"admin_richard"},
+];
+
+// Employee record for Richard Urbina (Admin)
+const SYSTEM_USER = {
+  id: "system",
+  name: "BINET Sistema",
+  role: "Sistema",
+  dept: "Automático",
+  avatar: "B",
+  color: "#6c63ff",
+  online: true,
+  xp: 0,
+  level: 1,
+  badges: [],
+};
+
+const RICHARD = {
+  id:"admin_richard",
+  name:"Richard Urbina",
+  role:"Admin",
+  dept:"Dirección",
+  avatar:"RU",
+  color:"#6c63ff",
+  online:true,
+  xp:0,
+  level:1,
+  badges:["👑"],
+  reportsTo:null,
+  canAssignUp:false,
+  yearHistory:[],
+};
+
+const USERS = [
+  {id:"u1",name:"Carlos Méndez",role:"Admin",   dept:"Dirección",   avatar:"CM",color:"#6c63ff",online:true, xp:2840,level:8,badges:["👑","🔥","⭐"],reportsTo:null,          canAssignUp:false,yearHistory:[{year:2023,maxLevel:7,maxLevelName:"Cetros",icon:"👑",xp:2100},{year:2024,maxLevel:9,maxLevelName:"Dragón Rojo",icon:"🔴",xp:4800}]},
+  {id:"u2",name:"Ana García",   role:"Manager", dept:"Tecnología",  avatar:"AG",color:"#22c55e",online:true, xp:1920,level:6,badges:["💡","🚀"],           reportsTo:"u1",         canAssignUp:false,yearHistory:[]},
+  {id:"u3",name:"Marco Ruiz",   role:"Employee",dept:"Marketing",   avatar:"MR",color:"#f59e0b",online:false,xp:1340,level:5,badges:["🎨"],              reportsTo:"u1",         canAssignUp:false,yearHistory:[]},
+  {id:"u4",name:"Sofía Medina", role:"Manager", dept:"RRHH",        avatar:"SM",color:"#ec4899",online:true, xp:1780,level:6,badges:["🤝","❤️"],          reportsTo:"u1",         canAssignUp:false,yearHistory:[]},
+  {id:"u5",name:"Diego Torres", role:"Employee",dept:"Ventas",      avatar:"DT",color:"#3b82f6",online:true, xp:980, level:4,badges:["💼"],              reportsTo:"u2",         canAssignUp:false,yearHistory:[]},
+  {id:"u6",name:"Lucía Vega",   role:"Employee",dept:"Finanzas",    avatar:"LV",color:"#14b8a6",online:false,xp:1120,level:4,badges:["📊"],              reportsTo:"u4",         canAssignUp:false,yearHistory:[]},
+  {id:"u7",name:"Javier Ríos",  role:"Employee",dept:"Operaciones", avatar:"JR",color:"#f97316",online:true, xp:760, level:3,badges:[],                 reportsTo:"u2",         canAssignUp:false,yearHistory:[]},
+];
+
+const GROUPS = [
+  {id:"g1",name:"Equipo Tecnología",desc:"Desarrollo y sistemas",avatar:"💻",color:"#6c63ff",members:["u1","u2","u5","u7"],pinned:true},
+  {id:"g2",name:"Marketing & Ventas",desc:"Estrategia y campañas",avatar:"📣",color:"#f59e0b",members:["u1","u3","u5"]},
+  {id:"g3",name:"RRHH General",desc:"Recursos humanos",avatar:"🤝",color:"#ec4899",members:["u1","u4","u6"]},
+  {id:"g4",name:"Proyecto Alpha",desc:"Proyecto prioritario Q1",avatar:"🚀",color:"#22c55e",members:["u1","u2","u3","u4","u5","u6","u7"]},
+];
+
+const now = Date.now();
+const SEED_MESSAGES = {
+  "dm_u2": [
+    {id:"m1",from:"u2",text:"Hola! ¿Pudiste revisar el PR que subí esta mañana?",ts:now-3600000*2,read:true},
+    {id:"m2",from:"me",text:"Sí, lo vi. Tiene unos comentarios menores pero en general está muy bien.",ts:now-3600000*1.8,read:true},
+    {id:"m3",from:"u2",text:"Perfecto! Lo corrijo en un momento 🙌",ts:now-3600000*1.5,read:true},
+    {id:"m4",from:"u2",text:"¿Nos vemos en el standup de las 3?",ts:now-1800000,read:false},
+  ],
+  "dm_u4": [
+    {id:"m5",from:"u4",text:"Hola, necesito que completes tu evaluación de desempeño antes del viernes.",ts:now-86400000,read:true},
+    {id:"m6",from:"me",text:"Claro, ya lo tengo casi listo. Te lo envío mañana.",ts:now-80000000,read:true},
+  ],
+  "g1": [
+    {id:"m7",from:"u2",text:"Deploy en staging listo ✅ Pueden hacer pruebas.",ts:now-7200000,read:true},
+    {id:"m8",from:"u7",text:"Probando ahora...",ts:now-7000000,read:true},
+    {id:"m9",from:"u2",text:"Encontré un bug menor en el módulo de reportes, lo parcheo hoy.",ts:now-3000000,read:true},
+    {id:"m10",from:"me",text:"Gracias Ana. Que quede listo antes del demo de mañana.",ts:now-2900000,read:true},
+    {id:"m11",from:"u5",text:"¿A qué hora es el demo?",ts:now-2800000,read:false},
+  ],
+  "g4": [
+    {id:"m12",from:"u1",text:"📢 Recordatorio: Reunión de kickoff Proyecto Alpha mañana 10am. Presencia obligatoria.",ts:now-172800000,read:true},
+    {id:"m13",from:"u3",text:"Confirmado ✅",ts:now-170000000,read:true},
+    {id:"m14",from:"u4",text:"Ahí estaré 👍",ts:now-169000000,read:true},
+    {id:"m15",from:"u2",text:"Vengo con el deck listo.",ts:now-86400000,read:true},
+  ],
+};
+
+const SEED_TASKS = [
+  {id:"t1",title:"Revisar PR #142 - Auth Module",desc:"Revisar y aprobar el pull request del módulo de autenticación.",assignedTo:"me",assignedBy:"u2",dueDate:new Date(now+86400000*2).toISOString().slice(0,16),priority:"high",status:"pending",xpReward:80,tags:["dev","review"]},
+  {id:"t2",title:"Preparar deck para cliente Acme",desc:"Presentación ejecutiva para reunión del jueves.",assignedTo:"me",assignedBy:"u1",dueDate:new Date(now+86400000).toISOString().slice(0,16),priority:"urgent",status:"in_progress",xpReward:120,tags:["ventas","cliente"]},
+  {id:"t3",title:"Evaluar candidato Backend",desc:"Entrevista técnica para posición Senior Backend.",assignedTo:"u2",assignedBy:"u4",dueDate:new Date(now+86400000*3).toISOString().slice(0,16),priority:"medium",status:"pending",xpReward:60,tags:["rrhh"]},
+  {id:"t4",title:"Actualizar documentación API",desc:"Actualizar Swagger con los nuevos endpoints del Q1.",assignedTo:"u7",assignedBy:"me",dueDate:new Date(now+86400000*5).toISOString().slice(0,16),priority:"low",status:"pending",xpReward:40,tags:["dev","docs"]},
+  {id:"t5",title:"Informe de ventas Q1",desc:"Consolidar métricas y preparar informe trimestral.",assignedTo:"u5",assignedBy:"me",dueDate:new Date(now-86400000).toISOString().slice(0,16),priority:"high",status:"completed",xpReward:100,tags:["ventas","informe"]},
+  {id:"t6",title:"Configurar monitoreo de servidores",desc:"Implementar alertas en Grafana para los servicios críticos.",assignedTo:"me",assignedBy:"u1",dueDate:new Date(now+86400000*4).toISOString().slice(0,16),priority:"medium",status:"pending",xpReward:90,tags:["dev","ops"]},
+];
+
+const ACHIEVEMENTS_CATALOG = [
+  {id:"a1",name:"Primera Tarea",desc:"Completa tu primera tarea",icon:"✅",xpReward:50,condition:"tasks_completed>=1"},
+  {id:"a2",name:"Incansable",desc:"Completa 10 tareas",icon:"🔥",xpReward:200,condition:"tasks_completed>=10"},
+  {id:"a3",name:"Comunicador",desc:"Envía 50 mensajes",icon:"💬",xpReward:100,condition:"messages_sent>=50"},
+  {id:"a4",name:"Puntual",desc:"Completa 5 tareas antes del vencimiento",icon:"⏰",xpReward:150,condition:"tasks_on_time>=5"},
+  {id:"a5",name:"Líder",desc:"Asigna 10 tareas",icon:"👑",xpReward:300,condition:"tasks_assigned>=10"},
+  {id:"a6",name:"Estrella",desc:"Alcanza 1000 XP",icon:"⭐",xpReward:0,condition:"xp>=1000"},
+  {id:"a7",name:"Innovador",desc:"Crea 3 grupos",icon:"💡",xpReward:120,condition:"groups_created>=3"},
+  {id:"a8",name:"Dedicado",desc:"Inicia sesión 7 días seguidos",icon:"🏆",xpReward:500,condition:"streak>=7"},
+];
+
+const GLOBAL_ANNOUNCEMENTS = [
+  {id:"ann1",from:"u1",title:"🎉 Cierre de Q1 exitoso",text:"Equipo, cerramos el primer trimestre con 118% de la meta de ventas. ¡Felicitaciones a todos! Esta semana habrá celebración.",ts:now-172800000,pinned:true,reactions:{"🎉":["u2","u3","u4"],"👏":["u5","u6"]}},
+  {id:"ann2",from:"u1",title:"📋 Nuevas políticas de trabajo remoto",text:"A partir del próximo mes, se habilitarán 2 días de trabajo remoto por semana para todos los departamentos. Revisen el documento adjunto.",ts:now-86400000,pinned:false,reactions:{"❤️":["u2","u4","u5"],"👍":["u3","u7"]}},
+  {id:"ann3",from:"u4",title:"🏆 Reconocimiento del mes",text:"Felicitamos a Ana García por su excelente trabajo en el deployment del Proyecto Alpha. ¡Ejemplo de dedicación y calidad!",ts:now-43200000,pinned:false,reactions:{"🔥":["u1","u3","u5"],"⭐":["u2","u6","u7"]}},
+];
+
+/* ── HELPERS ─────────────────────────────────────────────── */
+const s = (obj) => ({ style: obj });
+function timeAgo(ts) {
+  const d = (Date.now() - ts) / 1000;
+  if (d < 60) return "ahora";
+  if (d < 3600) return `${Math.floor(d/60)}m`;
+  if (d < 86400) return `${Math.floor(d/3600)}h`;
+  return `${Math.floor(d/86400)}d`;
+}
+function fmtDate(iso) {
+  const d = new Date(iso);
+  return d.toLocaleDateString("es-ES",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"});
+}
+const DEFAULT_LEVELS = [
+  {l:1,  t:"Pollito",             xp:0,    color:"#fbbf24", icon:"🐣"},
+  {l:2,  t:"Mazos",               xp:200,  color:"#a78bfa", icon:"🪓"},
+  {l:3,  t:"Hachas de Metal",     xp:500,  color:"#6b7280", icon:"🪓"},
+  {l:4,  t:"Hachas de Plata",     xp:900,  color:"#e2e8f0", icon:"⚔️"},
+  {l:5,  t:"Hachas de Oro",       xp:1400, color:"#fbbf24", icon:"🏆"},
+  {l:6,  t:"Achones",             xp:2000, color:"#f97316", icon:"🔥"},
+  {l:7,  t:"Cetros",              xp:2800, color:"#c084fc", icon:"👑"},
+  {l:8,  t:"Dragón Azul",         xp:3800, color:"#38bdf8", icon:"🐲"},
+  {l:9,  t:"Dragón Rojo",         xp:5000, color:"#ef4444", icon:"🔴"},
+  {l:10, t:"Dragón Plateado",     xp:7000, color:"#cbd5e1", icon:"🥈"},
+];
+// Global mutable ref so getLv/xpToNext can read current levels without prop drilling
+let _LEVELS = [...DEFAULT_LEVELS];
+function getLv(xp) {
+  let lv = _LEVELS[0];
+  for (const v of _LEVELS) if (xp >= v.xp) lv = v;
+  return lv;
+}
+function xpToNext(xp) {
+  const next = _LEVELS.find(l => l.xp > xp);
+  return next ? next.xp : 9999;
+}
+/* ── ORG CHART HELPERS ──────────────────────────────────── */
+// Returns all user IDs that `userId` can assign tasks to
+function getAssignableTargets(userId, allUsers) {
+  const meUser = allUsers.find(u => u.id === userId);
+  if (!meUser) return [];
+  // Admin can assign to everyone
+  if (meUser.role === "Admin") return allUsers.filter(u => u.id !== userId).map(u => u.id);
+  const result = [];
+  allUsers.forEach(u => {
+    if (u.id === userId) return;
+    // Can always assign to direct reports
+    if (u.reportsTo === userId) { result.push(u.id); return; }
+    // Can assign to anyone who reports to someone I manage (indirect)
+    const reportsBoss = allUsers.find(b => b.id === u.reportsTo);
+    if (reportsBoss && reportsBoss.reportsTo === userId) { result.push(u.id); return; }
+    // Can assign upward only if canAssignUp is true
+    if (meUser.canAssignUp && u.reportsTo !== userId) {
+      // can assign to boss
+      if (u.id === meUser.reportsTo) { result.push(u.id); return; }
+    }
+    // Managers can also assign to peers in same area
+    if (meUser.role === "Manager" && u.dept === meUser.dept && u.role === "Employee") {
+      result.push(u.id);
+    }
+  });
+  return [...new Set(result)];
+}
+
+// Returns the full chain from root to user
+function getChain(userId, allUsers) {
+  const chain = [];
+  let current = allUsers.find(u => u.id === userId);
+  let depth = 0;
+  while (current && depth < 10) {
+    chain.unshift(current);
+    if (!current.reportsTo) break;
+    current = allUsers.find(u => u.id === current.reportsTo);
+    depth++;
+  }
+  return chain;
+}
+
+// Build tree structure for org chart
+function buildOrgTree(allUsers, rootId) {
+  const root = allUsers.find(u => u.id === rootId || (!rootId && !u.reportsTo));
+  if (!root) return null;
+  function buildNode(u) {
+    const children = allUsers.filter(x => x.reportsTo === u.id).map(buildNode);
+    return {...u, children};
+  }
+  return buildNode(root);
+}
+
+const PRIORITY_CFG = {
+  urgent:{label:"Urgente",color:T.red,bg:"rgba(239,68,68,.12)"},
+  high:{label:"Alta",color:T.orange,bg:"rgba(245,158,11,.12)"},
+  medium:{label:"Media",color:T.blue,bg:"rgba(59,130,246,.12)"},
+  low:{label:"Baja",color:T.text3,bg:"rgba(96,96,120,.12)"},
+};
+const STATUS_CFG = {
+  pending:{label:"Pendiente",color:T.orange,icon:"○"},
+  in_progress:{label:"En progreso",color:T.blue,icon:"◑"},
+  completed:{label:"Completada",color:T.green,icon:"●"},
+  blocked:{label:"Bloqueada",color:T.red,icon:"✕"},
+};
+
+/* ── AVATAR ──────────────────────────────────────────────── */
+function Avatar({user, size=36, showBadge=false}) {
+  const u = typeof user === "string" ? USERS.find(x=>x.id===user) : user;
+  if (!u) return null;
+  return (
+    <div style={{position:"relative",flexShrink:0}}>
+      <div style={{
+        width:size,height:size,borderRadius:"50%",
+        background:`linear-gradient(135deg,${u.color}cc,${u.color}66)`,
+        border:`2px solid ${u.color}44`,
+        display:"flex",alignItems:"center",justifyContent:"center",
+        fontSize:size*0.36,fontWeight:600,color:"#fff",
+        letterSpacing:"-0.5px",
+        boxShadow:`0 0 0 2px ${T.bg},0 2px 8px ${u.color}33`,
+      }}>
+        {u.avatar}
+      </div>
+      {showBadge && (
+        <div style={{
+          position:"absolute",bottom:0,right:0,
+          width:size*0.32,height:size*0.32,
+          borderRadius:"50%",
+          background: u.online ? T.green : T.text3,
+          border:`2px solid ${T.bg}`,
+        }}/>
+      )}
+    </div>
+  );
+}
+
+/* ── XP BAR ──────────────────────────────────────────────── */
+function XPBar({xp,compact=false}) {
+  const lv = getLv(xp);
+  const next = xpToNext(xp);
+  const prev = lv.xp;
+  const pct = Math.min(100, ((xp - prev) / (next - prev)) * 100);
+  return (
+    <div>
+      {!compact && <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+        <span style={{fontSize:11,color:T.text2,fontWeight:500}}>{lv.icon||'⭐'} LV{lv.l} · {lv.t}</span>
+        <span style={{fontSize:11,color:T.text3,fontFamily:"'DM Mono',monospace"}}>{xp}/{next} XP</span>
+      </div>}
+      <div style={{height:compact?4:6,background:T.bg4,borderRadius:8,overflow:"hidden"}}>
+        <div style={{height:"100%",width:pct+"%",background:`linear-gradient(90deg,${T.accent},${T.accent2})`,borderRadius:8,transition:"width .6s ease"}}/>
+      </div>
+    </div>
+  );
+}
+
+/* ── BADGE ───────────────────────────────────────────────── */
+function Badge({label,color,bg,size="sm"}) {
+  return (
+    <span style={{
+      display:"inline-flex",alignItems:"center",
+      padding: size==="sm"?"2px 7px":"3px 10px",
+      borderRadius:99,fontSize:size==="sm"?10:11,
+      fontWeight:600,letterSpacing:.3,
+      color,background:bg||color+"22",
+      border:`1px solid ${color}33`,
+    }}>{label}</span>
+  );
+}
+
+/* ── TOAST ───────────────────────────────────────────────── */
+let toastId = 0;
+function Toast({toasts}) {
+  return (
+    <div style={{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",zIndex:9999,display:"flex",flexDirection:"column",gap:8,pointerEvents:"none",maxWidth:340,width:"90%"}}>
+      {toasts.map(t => (
+        <div key={t.id} style={{
+          background:T.surface2,border:`1px solid ${T.border2}`,
+          borderLeft:`3px solid ${t.color||T.accent}`,
+          borderRadius:T.radius_sm||10,padding:"10px 14px",
+          boxShadow:"0 8px 32px rgba(0,0,0,.5)",
+          animation:"notifIn .3s ease-out",
+          display:"flex",alignItems:"center",gap:10,
+        }}>
+          <span style={{fontSize:20}}>{t.icon||"✨"}</span>
+          <div>
+            <div style={{fontSize:13,fontWeight:600,color:T.text}}>{t.title}</div>
+            {t.msg && <div style={{fontSize:11,color:T.text2,marginTop:1}}>{t.msg}</div>}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════
+   MAIN APP
+══════════════════════════════════════════════════════════ */
+function NexusApp() {
+  /* ── STATE ── */
+  const [screen, setScreen] = useState("login"); // login | app
+  const [activeTab, setActiveTab] = useState("chats");
+  const [activeChat, setActiveChat] = useState(null); // {type:"dm"|"group"|"announce", id}
+  const [activeTaskView, setActiveTaskView] = useState("my"); // my | team | all
+  const [activeAdminTab, setActiveAdminTab] = useState("users");
+  const [levels, setLevels] = useState(DEFAULT_LEVELS);
+  // keep global ref in sync
+  useEffect(() => { _LEVELS = levels; }, [levels]);
+
+  function doAnnualReset() {
+    const year = new Date().getFullYear();
+    const archiveUser = (u) => {
+      const lv = getLv(u.xp);
+      const hist = u.yearHistory || [];
+      const entry = {year, maxLevel:lv.l, maxLevelName:lv.t, icon:lv.icon||"⭐", xp:u.xp};
+      const newHist = hist.find(h=>h.year===year) ? hist.map(h=>h.year===year?entry:h) : [...hist, entry];
+      return {...u, xp:0, yearHistory:newHist};
+    };
+    setUsers(us => us.map(archiveUser));
+    setMe(m => archiveUser(m));
+    addToast("Reset anual ejecutado", `El nivel de ${year} fue archivado. ¡Nuevo año!`, "🎊", T.green);
+  }
+  const [me, setMe] = useState({id:"me",name:"Tú",role:"Manager",dept:"Tecnología",avatar:"YO",color:T.accent,online:true,xp:450,level:3,badges:["🚀"],yearHistory:[{year:2024,maxLevel:3,maxLevelName:"Hachas de Metal",icon:"🪓",xp:450}]});
+  const currentYear = new Date().getFullYear();
+  const [messages, setMessages] = useState(SEED_MESSAGES);
+  const [tasks, setTasks] = useState(SEED_TASKS);
+  const [announcements, setAnnouncements] = useState(GLOBAL_ANNOUNCEMENTS);
+  const [users, setUsers] = useState(USERS);
+  const [areas, setAreas] = useState(["Tecnología","Marketing","Ventas","RRHH","Finanzas","Operaciones","Legal","Dirección"]);
+  useEffect(() => { window.__BINET_AREAS__ = areas; }, [areas]);
+  useEffect(() => { window.__BINET_ALLUSERS__ = [...users, {...me, id:"me"}]; }, [users, me]);
+  const [groups, setGroups] = useState(GROUPS);
+  const [achievements, setAchievements] = useState(ACHIEVEMENTS_CATALOG);
+  const [toasts, setToasts] = useState([]);
+  const [modal, setModal] = useState(null); // null | {type, data}
+  const [confirmModal, setConfirmModal] = useState(null); // {msg, onConfirm, danger?}
+  const askConfirm = (msg, onConfirm, danger=true) => setConfirmModal({msg, onConfirm, danger});
+  const [composeText, setComposeText] = useState("");
+  const [typingUsers, setTypingUsers] = useState({}); // {chatKey: {userId, name, ts}}
+  const typingTimerRef = useRef({});
+  const [loginUser, setLoginUser] = useState("");
+  const [loginPass, setLoginPass] = useState("");
+  const [loginError, setLoginError] = useState("");
+  const [searchQ, setSearchQ] = useState("");
+  const [notifCount, setNotifCount] = useState(3);
+  const [userStats, setUserStats] = useState({tasks_completed:3,messages_sent:24,tasks_on_time:2,tasks_assigned:2,groups_created:0,streak:3});
+  const bottomRef = useRef(null);
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [soundVolume, setSoundVolume] = useState(0.5);
+  // sync to global
+  useEffect(() => {
+    window.__BINET_SOUND__.enabled = soundEnabled;
+    window.__BINET_SOUND__.volume = soundVolume;
+  }, [soundEnabled, soundVolume]);
+
+  /* ── TOAST ── */
+  const addToast = useCallback((title, msg, icon, color) => {
+    const id = ++toastId;
+    setToasts(t => [...t, {id, title, msg, icon, color}]);
+    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 3500);
+  }, []);
+
+  /* ── LOGIN ── */
+  function doLogin() {
+    setLoginError("");
+    const u = loginUser.trim().toLowerCase();
+    const p = loginPass;
+    if (!u || !p) { setLoginError("Ingresa usuario y contraseña"); return; }
+    // Check AUTH_REGISTRY (includes dynamically created users)
+    const authEntry = AUTH_REGISTRY.find(a => a.username.toLowerCase() === u && a.password === p);
+    if (!authEntry) { setLoginError("Usuario o contraseña incorrectos"); playSound("error"); return; }
+    // Find employee record
+    const emp = authEntry.employeeId === "admin_richard"
+      ? RICHARD
+      : users.find(x => x.id === authEntry.employeeId);
+    if (!emp) { setLoginError("Empleado no encontrado. Contacta al administrador."); return; }
+    setMe({...emp, id:"me"});
+    setScreen("app");
+    setLoginUser(""); setLoginPass("");
+    playSound("login");
+    setTimeout(() => addToast(`¡Bienvenido, ${emp.name}!`, `${emp.role} · ${emp.dept}`, "👋", T.accent), 500);
+  }
+
+  /* ── SEND MESSAGE ── */
+  function sendMsg() {
+    if (!composeText.trim() || !activeChat) return;
+    const key = activeChat.type === "dm" ? `dm_${activeChat.id}` : activeChat.id;
+    const msg = {id:"m"+Date.now(), from:"me", text:composeText, ts:Date.now(), read:true};
+    setMessages(m => ({...m, [key]: [...(m[key]||[]), msg]}));
+    setComposeText("");
+    setUserStats(s => ({...s, messages_sent:s.messages_sent+1}));
+    playSound("message_send");
+    // simulate reply with typing indicator
+    if (activeChat.type === "dm") {
+      const replyDelay = 1500 + Math.random()*2000;
+      const u = USERS.find(x=>x.id===activeChat.id);
+      if (u) {
+        // Show typing indicator after short pause
+        setTimeout(() => {
+          setTypingUsers(t => ({...t, [key]: {userId:u.id, name:u.name, ts:Date.now()}}));
+        }, 600);
+        // Remove typing + send reply
+        setTimeout(() => {
+          setTypingUsers(t => { const n={...t}; delete n[key]; return n; });
+          const replies = ["Entendido 👍","Perfecto, lo reviso.","¡Gracias!","Ok, te confirmo pronto.","👌","Ahora lo veo 👀","Perfecto!","De acuerdo ✅"];
+          const reply = {id:"m"+Date.now(), from:activeChat.id, text:replies[Math.floor(Math.random()*replies.length)], ts:Date.now(), read:false};
+          setMessages(mm => ({...mm, [key]: [...(mm[key]||[]), reply]}));
+          playSound("message_receive");
+        }, replyDelay);
+      }
+    }
+  }
+
+  /* ── SCROLL TO BOTTOM ── */
+  useEffect(() => {
+    if (bottomRef.current) bottomRef.current.scrollIntoView({behavior:"smooth"});
+  }, [messages, activeChat]);
+
+  /* ── TASK ACTIONS ── */
+  function updateTaskStatus(id, status) {
+    setTasks(ts => ts.map(t => t.id!==id ? t : {...t, status}));
+    if (status === "completed") {
+      const task = tasks.find(t => t.id === id);
+      if (task && task.assignedTo === "me") {
+        const xpGain = task.xpReward;
+        setMe(m => {
+          const prevLv = getLv(m.xp);
+          const newXp = m.xp + xpGain;
+          const newLv = getLv(newXp);
+          // Level up detected → post global announcement
+          if (newLv.l > prevLv.l) {
+            setTimeout(() => {
+              const ann = {
+                id: "ann_lvl_" + Date.now(),
+                from: "system",
+                title: `🎖️ ¡${m.name} subió a ${newLv.icon||"⭐"} ${newLv.t}!`,
+                text: `¡Felicitaciones a ${m.name} por alcanzar el Nivel ${newLv.l} — ${newLv.t}! Su dedicación y esfuerzo son un ejemplo para todo el equipo. ¡Sigamos creciendo juntos! 🎉`,
+                ts: Date.now(),
+                pinned: false,
+                isLevelUp: true,
+                levelData: newLv,
+                userName: m.name,
+                reactions: {"🎉":[], "👏":[], "🔥":[]},
+              };
+              setAnnouncements(prev => [ann, ...prev]);
+              playSound("level_up");
+              addToast(`🎖️ ¡Nivel ${newLv.l}!`, `${newLv.icon||"⭐"} ${newLv.t} — ¡Felicitaciones!`, "🎊", newLv.color||T.accent);
+            }, 400);
+          }
+          return {...m, xp: newXp};
+        });
+        addToast(`+${xpGain} XP ganados`, task.title, "⚡", T.accent);
+        setUserStats(s => ({...s, tasks_completed:s.tasks_completed+1}));
+        playSound("task_complete");
+      }
+    }
+  }
+
+  /* ── ACHIEVEMENT CHECK ── */
+  useEffect(() => {
+    // simple check for first task completion
+    if (userStats.tasks_completed >= 1 && !me.badges.includes("✅")) {
+      setMe(m => ({...m, badges:[...m.badges,"✅"], xp: m.xp+50}));
+      addToast("¡Logro desbloqueado!", "Primera Tarea completada +50XP", "🏆", T.orange);
+      playSound("achievement");
+    }
+  }, [userStats.tasks_completed]);
+
+  const allChats = useMemo(() => {
+    const dms = USERS.map(u => {
+      const key = `dm_${u.id}`;
+      const msgs = messages[key] || [];
+      const last = msgs[msgs.length-1];
+      const unread = msgs.filter(m => m.from !== "me" && !m.read).length;
+      return {type:"dm", id:u.id, user:u, last, unread, ts:last?.ts||0};
+    });
+    const grps = groups.map(g => {
+      const msgs = messages[g.id] || [];
+      const last = msgs[msgs.length-1];
+      const unread = msgs.filter(m => m.from !== "me" && !m.read).length;
+      return {type:"group", id:g.id, group:g, last, unread, ts:last?.ts||0};
+    });
+    return [...dms, ...grps].sort((a,b) => b.ts - a.ts);
+  }, [messages, groups]);
+
+  const filteredChats = useMemo(() =>
+    allChats.filter(c => {
+      if (!searchQ) return true;
+      const q = searchQ.toLowerCase();
+      if (c.type === "dm") return c.user.name.toLowerCase().includes(q);
+      return c.group.name.toLowerCase().includes(q);
+    }), [allChats, searchQ]);
+
+  const myTasks = tasks.filter(t => t.assignedTo === "me");
+  const teamTasks = tasks.filter(t => t.assignedBy === "me" && t.assignedTo !== "me");
+  const overdueTasks = myTasks.filter(t => t.status !== "completed" && new Date(t.dueDate) < new Date());
+
+  /* ══ SCREENS ══ */
+  if (screen === "login") return <LoginScreen username={loginUser} setUsername={setLoginUser} password={loginPass} setPassword={setLoginPass} error={loginError} onLogin={doLogin}/>;
+
+  return (
+    <div style={{width:"100%",height:"100vh",background:T.bg,display:"flex",flexDirection:"column",maxWidth:1200,margin:"0 auto",position:"relative",overflow:"hidden"}}>
+      <Toast toasts={toasts}/>
+
+      {/* MODAL */}
+      {/* CONFIRM DIALOG */}
+      {confirmModal && (
+        <div onClick={()=>setConfirmModal(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:T.surface,border:`2px solid ${confirmModal.danger?T.red:T.border2}`,borderRadius:20,padding:"24px",maxWidth:320,width:"100%",animation:"pop .2s ease-out",boxShadow:"0 16px 48px rgba(0,0,0,.7)"}}>
+            <div style={{fontSize:28,textAlign:"center",marginBottom:12}}>{confirmModal.danger?"🗑️":"⚠️"}</div>
+            <div style={{fontSize:14,fontWeight:600,color:T.text,textAlign:"center",marginBottom:6}}>
+              {confirmModal.danger ? "¿Confirmar eliminación?" : "¿Confirmar acción?"}
+            </div>
+            <div style={{fontSize:13,color:T.text2,textAlign:"center",marginBottom:20,lineHeight:1.5}}>{confirmModal.msg}</div>
+            <div style={{display:"flex",gap:10}}>
+              <button onClick={()=>setConfirmModal(null)} style={{flex:1,padding:"11px",borderRadius:12,background:T.bg3,border:`1px solid ${T.border}`,fontSize:13,fontWeight:500,color:T.text2,cursor:"pointer"}}>
+                Cancelar
+              </button>
+              <button onClick={()=>{ confirmModal.onConfirm(); setConfirmModal(null); }} style={{
+                flex:1,padding:"11px",borderRadius:12,
+                background: confirmModal.danger ? `rgba(239,68,68,.15)` : `${T.accent}22`,
+                border:`1px solid ${confirmModal.danger?T.red:T.accent}`,
+                fontSize:13,fontWeight:700,
+                color: confirmModal.danger ? T.red : T.accent2,
+                cursor:"pointer",
+              }}>
+                {confirmModal.danger ? "Sí, eliminar" : "Confirmar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {modal && <ModalLayer modal={modal} setModal={setModal} tasks={tasks} setTasks={setTasks} users={users} setUsers={setUsers} me={me} setMe={setMe} achievements={achievements} setAchievements={setAchievements} addToast={addToast} groups={groups} setGroups={setGroups} announcements={announcements} setAnnouncements={setAnnouncements}/>}
+
+      {/* ACTIVE CHAT VIEW */}
+      {activeChat ? (
+        <ChatView
+          chat={activeChat}
+          messages={messages}
+          composeText={composeText}
+          setComposeText={setComposeText}
+          sendMsg={sendMsg}
+          onBack={()=>setActiveChat(null)}
+          me={me}
+          bottomRef={bottomRef}
+          users={users}
+          setModal={setModal}
+          typingUsers={typingUsers}
+          announcements={announcements}
+        />
+      ) : (
+        <>
+          {/* HEADER */}
+          <AppHeader tab={activeTab} me={me} notifCount={notifCount} setModal={setModal} onProfile={()=>setModal({type:"profile",data:me})} onLogout={()=>{setScreen("login");setActiveTab("chats");setActiveChat(null);setLoginUser("");setLoginPass("");setLoginError("");}} />
+
+          {/* TAB CONTENT */}
+          <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
+            {activeTab === "chats" && <ChatsTab chats={filteredChats} searchQ={searchQ} setSearchQ={setSearchQ} setActiveChat={setActiveChat} setModal={setModal} announcements={announcements} me={me} messages={messages}/>}
+            {activeTab === "tasks" && <TasksTab tasks={tasks} view={activeTaskView} setView={setActiveTaskView} onUpdate={updateTaskStatus} setModal={setModal} me={me} users={users} overdue={overdueTasks}/>}
+            {activeTab === "people" && <PeopleTab users={users} me={me} setModal={setModal} setActiveChat={setActiveChat}/>}
+            {activeTab === "profile" && <ProfileTab me={me} userStats={userStats} achievements={achievements} tasks={tasks} setModal={setModal} soundEnabled={soundEnabled} soundVolume={soundVolume}/>}
+            {activeTab === "admin" && <AdminTab users={users} setUsers={setUsers} achievements={achievements} setAchievements={setAchievements} tasks={tasks} setTasks={setTasks} adminTab={activeAdminTab} setAdminTab={setActiveAdminTab} setModal={setModal} me={me} addToast={addToast} levels={levels} setLevels={setLevels} onAnnualReset={doAnnualReset} areas={areas} setAreas={setAreas} askConfirm={askConfirm}/>}
+          </div>
+
+          {/* BOTTOM NAV */}
+          <BottomNav tab={activeTab} setTab={setActiveTab} me={me} tasks={tasks} unread={allChats.reduce((a,c)=>a+c.unread,0)}/>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ══ LOGIN ══ */
+function LoginScreen({username, setUsername, password, setPassword, error, onLogin}) {
+  const [showPass, setShowPass] = useState(false);
+  return (
+    <div style={{width:"100%",height:"100vh",background:T.bg,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:28,maxWidth:430,margin:"0 auto",position:"relative",overflow:"hidden"}}>
+      {/* Background glow */}
+      <div style={{position:"absolute",top:"-20%",left:"50%",transform:"translateX(-50%)",width:300,height:300,borderRadius:"50%",background:`radial-gradient(circle,${T.accent}18,transparent 70%)`,pointerEvents:"none"}}/>
+
+      <div style={{animation:"fadeUp .4s ease-out",width:"100%",maxWidth:360,position:"relative",zIndex:1}}>
+        {/* Logo */}
+        <div style={{textAlign:"center",marginBottom:36}}>
+          <div style={{
+            width:80,height:80,borderRadius:28,
+            background:`linear-gradient(135deg,${T.accent},${T.accent3})`,
+            display:"flex",alignItems:"center",justifyContent:"center",
+            fontSize:36,fontWeight:800,color:"#fff",
+            margin:"0 auto 16px",
+            boxShadow:`0 20px 48px ${T.accent}55`,
+            letterSpacing:"-1px",
+          }}>N</div>
+          <div style={{fontSize:30,fontWeight:800,letterSpacing:"-1px",color:T.text}}>BINET</div>
+          <div style={{fontSize:12,color:T.text3,marginTop:5,letterSpacing:1,textTransform:"uppercase"}}>Comunicación Interna</div>
+        </div>
+
+        {/* Card */}
+        <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:24,padding:"28px 24px",display:"flex",flexDirection:"column",gap:0,boxShadow:`0 24px 64px rgba(0,0,0,.5)`}}>
+          <div style={{fontSize:18,fontWeight:700,color:T.text,marginBottom:6}}>Iniciar sesión</div>
+          <div style={{fontSize:12,color:T.text3,marginBottom:24}}>Ingresa tus credenciales de acceso</div>
+
+          {/* Username */}
+          <div style={{marginBottom:14}}>
+            <div style={{fontSize:11,fontWeight:600,color:T.text2,marginBottom:7,textTransform:"uppercase",letterSpacing:1}}>Usuario</div>
+            <div style={{position:"relative"}}>
+              <div style={{position:"absolute",left:14,top:"50%",transform:"translateY(-50%)",fontSize:16,pointerEvents:"none"}}>👤</div>
+              <input
+                value={username}
+                onChange={e=>setUsername(e.target.value)}
+                onKeyDown={e=>e.key==="Enter"&&onLogin()}
+                placeholder="nombre de usuario"
+                autoCapitalize="none"
+                autoCorrect="off"
+                style={{width:"100%",background:T.bg3,border:`1px solid ${error?T.red:T.border2}`,borderRadius:14,padding:"13px 14px 13px 42px",fontSize:15,color:T.text,fontFamily:"'DM Mono',monospace",letterSpacing:"0.5px"}}
+              />
+            </div>
+          </div>
+
+          {/* Password */}
+          <div style={{marginBottom:20}}>
+            <div style={{fontSize:11,fontWeight:600,color:T.text2,marginBottom:7,textTransform:"uppercase",letterSpacing:1}}>Contraseña</div>
+            <div style={{position:"relative"}}>
+              <div style={{position:"absolute",left:14,top:"50%",transform:"translateY(-50%)",fontSize:16,pointerEvents:"none"}}>🔒</div>
+              <input
+                value={password}
+                onChange={e=>setPassword(e.target.value)}
+                onKeyDown={e=>e.key==="Enter"&&onLogin()}
+                type={showPass?"text":"password"}
+                placeholder="••••••••"
+                style={{width:"100%",background:T.bg3,border:`1px solid ${error?T.red:T.border2}`,borderRadius:14,padding:"13px 44px 13px 42px",fontSize:15,color:T.text,letterSpacing:"1px"}}
+              />
+              <button onClick={()=>setShowPass(s=>!s)} style={{
+                position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",
+                background:"none",border:"none",fontSize:16,color:T.text3,padding:4,cursor:"pointer",
+              }}>{showPass?"🙈":"👁️"}</button>
+            </div>
+          </div>
+
+          {/* Error */}
+          {error && (
+            <div style={{
+              display:"flex",alignItems:"center",gap:8,
+              background:"rgba(239,68,68,.1)",border:"1px solid rgba(239,68,68,.3)",
+              borderRadius:10,padding:"9px 12px",marginBottom:16,
+            }}>
+              <span style={{fontSize:14}}>⚠️</span>
+              <span style={{fontSize:12,color:T.red,fontWeight:500}}>{error}</span>
+            </div>
+          )}
+
+          {/* Submit */}
+          <button onClick={onLogin} style={{
+            width:"100%",padding:"15px",borderRadius:14,fontSize:15,fontWeight:700,
+            background:`linear-gradient(135deg,${T.accent},${T.accent3})`,
+            color:"#fff",border:"none",
+            boxShadow:`0 10px 28px ${T.accent}44`,
+            letterSpacing:"0.3px",
+          }}>Ingresar →</button>
+        </div>
+
+        <div style={{textAlign:"center",marginTop:20,fontSize:11,color:T.text3,lineHeight:1.6}}>
+          ¿Sin acceso? Contacta al administrador<br/>para obtener tus credenciales.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ══ APP HEADER ══ */
+function AppHeader({tab, me, notifCount, setModal, onProfile, onLogout}) {
+  const titles = {chats:"Mensajes",tasks:"Tareas",people:"Equipo",profile:"Mi Perfil",admin:"Administración"};
+  const lv = getLv(me.xp);
+  return (
+    <div style={{padding:"16px 20px 12px",background:T.bg,borderBottom:`1px solid ${T.border}`,flexShrink:0}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <div style={{width:8,height:8,borderRadius:"50%",background:`linear-gradient(135deg,${T.accent},${T.accent2})`}}/>
+          <span style={{fontSize:11,fontWeight:600,color:T.accent2,letterSpacing:1,textTransform:"uppercase"}}>BINET</span>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          {notifCount > 0 && (
+            <button onClick={()=>{setModal({type:"notifications"});playSound("notification");}} style={{position:"relative",padding:"6px",borderRadius:10,background:T.surface,border:`1px solid ${T.border}`}}>
+              <span style={{fontSize:16}}>🔔</span>
+              <span style={{position:"absolute",top:-4,right:-4,background:T.red,color:"#fff",borderRadius:99,fontSize:9,padding:"1px 5px",fontWeight:700,border:`2px solid ${T.bg}`}}>{notifCount}</span>
+            </button>
+          )}
+          <button onClick={onProfile} style={{display:"flex",alignItems:"center",gap:8,background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"6px 10px 6px 6px"}}>
+            <Avatar user={me} size={28} showBadge/>
+            <div style={{textAlign:"left"}}>
+              <div style={{fontSize:12,fontWeight:600,color:T.text,lineHeight:1}}>{me.name.split(" ")[0]}</div>
+              <div style={{fontSize:9,color:T.accent2,lineHeight:1,marginTop:1}}>{lv.icon||"⭐"} LV{lv.l} · {lv.t}</div>
+            </div>
+          </button>
+          <button onClick={onLogout} title="Cerrar sesión" style={{width:34,height:34,borderRadius:10,background:T.surface,border:`1px solid ${T.border}`,fontSize:16,display:"flex",alignItems:"center",justifyContent:"center",color:T.text3}}>⏻</button>
+        </div>
+      </div>
+      <div style={{marginTop:12}}>
+        <div style={{fontSize:20,fontWeight:700,color:T.text,letterSpacing:"-0.3px"}}>{titles[tab]}</div>
+      </div>
+    </div>
+  );
+}
+
+/* ══ BOTTOM NAV ══ */
+function BottomNav({tab, setTab, me, tasks, unread}) {
+  const pendingTasks = tasks.filter(t=>t.assignedTo==="me"&&t.status!=="completed").length;
+  const isAdmin = me.role === "Admin" || me.role === "Manager";
+  const tabs = [
+    {id:"chats",icon:"💬",label:"Chat",badge:unread},
+    {id:"tasks",icon:"✅",label:"Tareas",badge:pendingTasks},
+    {id:"people",icon:"👥",label:"Equipo"},
+    {id:"profile",icon:"⚡",label:"Perfil"},
+    {id:"admin",icon:"⚙️",label:"Admin"},
+  ];
+  return (
+    <div style={{
+      display:"flex",padding:"8px 12px",
+      background:T.surface,borderTop:`1px solid ${T.border}`,
+      paddingBottom: "max(8px, env(safe-area-inset-bottom))",
+      flexShrink:0,gap:4,
+    }}>
+      {tabs.map(t => (
+        <button key={t.id} onClick={()=>setTab(t.id)} style={{
+          flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:3,
+          padding:"6px 4px",borderRadius:12,
+          background: tab===t.id ? `${T.accent}18` : "transparent",
+          transition:"all .15s",position:"relative",
+        }}>
+          {t.badge > 0 && <span style={{position:"absolute",top:2,right:"50%",marginRight:-16,background:T.red,color:"#fff",borderRadius:99,fontSize:8,padding:"1px 4px",fontWeight:700,border:`1.5px solid ${T.bg}`}}>{t.badge}</span>}
+          <span style={{fontSize:20}}>{t.icon}</span>
+          <span style={{fontSize:10,fontWeight:tab===t.id?600:400,color:tab===t.id?T.accent2:T.text3}}>{t.label}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/* ══ CHATS TAB ══ */
+function ChatsTab({chats, searchQ, setSearchQ, setActiveChat, setModal, announcements, me, messages}) {
+  const totalUnread = chats.reduce((a,c)=>a+c.unread,0);
+  return (
+    <div className="scroll" style={{flex:1,overflowY:"auto"}}>
+      {/* Announcements banner */}
+      <div style={{padding:"12px 16px 0"}}>
+        <button onClick={()=>setActiveChat({type:"announce",id:"global"})} style={{
+          width:"100%",borderRadius:16,
+          background:`linear-gradient(135deg,${T.accent}22,${T.accent3}11)`,
+          border:`1px solid ${T.accent}44`,
+          padding:"12px 16px",display:"flex",alignItems:"center",gap:12,
+          textAlign:"left",
+        }}>
+          <div style={{width:44,height:44,borderRadius:14,background:`linear-gradient(135deg,${T.accent},${T.accent3})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>📢</div>
+          <div style={{flex:1}}>
+            <div style={{fontSize:13,fontWeight:600,color:T.accent2}}>Anuncios Globales</div>
+            <div style={{fontSize:11,color:T.text2,marginTop:1}}>{announcements[0]?.title||"Sin anuncios"}</div>
+          </div>
+          <div style={{background:T.red,color:"#fff",borderRadius:99,fontSize:9,padding:"2px 6px",fontWeight:700}}>{announcements.length}</div>
+        </button>
+      </div>
+
+      {/* Search */}
+      <div style={{padding:"12px 16px 4px"}}>
+        <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,display:"flex",alignItems:"center",gap:8,padding:"8px 14px"}}>
+          <span style={{fontSize:16,color:T.text3}}>🔍</span>
+          <input value={searchQ} onChange={e=>setSearchQ(e.target.value)} placeholder="Buscar conversaciones..." style={{flex:1,fontSize:14,color:T.text,background:"transparent"}}/>
+        </div>
+      </div>
+
+      {/* New Group */}
+      <div style={{padding:"4px 16px 8px",display:"flex",gap:8}}>
+        <button onClick={()=>setModal({type:"newGroup"})} style={{flex:1,padding:"8px",borderRadius:10,border:`1px dashed ${T.border2}`,background:"transparent",fontSize:12,color:T.text2,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+          <span>➕</span> Nuevo grupo
+        </button>
+        <button onClick={()=>setModal({type:"newAnnouncement"})} style={{flex:1,padding:"8px",borderRadius:10,border:`1px dashed ${T.border2}`,background:"transparent",fontSize:12,color:T.text2,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+          <span>📣</span> Anuncio
+        </button>
+      </div>
+
+      {/* Chat list */}
+      <div style={{padding:"0 12px 16px"}}>
+        {chats.length === 0 && <div style={{textAlign:"center",padding:40,color:T.text3,fontSize:13}}>No hay conversaciones</div>}
+        {chats.map(c => (
+          <ChatListItem key={c.type+c.id} chat={c} onClick={()=>setActiveChat({type:c.type,id:c.id})}/>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ChatListItem({chat, onClick}) {
+  const name = chat.type === "dm" ? chat.user.name : chat.group.name;
+  const avatar = chat.type === "dm" ? null : null;
+  const lastText = chat.last?.text || "Sin mensajes";
+  const color = chat.type === "dm" ? chat.user.color : chat.group.color;
+  return (
+    <button onClick={onClick} style={{
+      width:"100%",display:"flex",alignItems:"center",gap:12,
+      padding:"10px 8px",borderRadius:14,
+      background: chat.unread > 0 ? `${T.surface}aa` : "transparent",
+      border: "1px solid transparent",
+      transition:"all .15s",marginBottom:2,
+    }}>
+      {chat.type === "dm" ? (
+        <Avatar user={chat.user} size={48} showBadge/>
+      ) : (
+        <div style={{width:48,height:48,borderRadius:16,background:`${color}22`,border:`1px solid ${color}44`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>{chat.group.avatar}</div>
+      )}
+      <div style={{flex:1,minWidth:0,textAlign:"left"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:2}}>
+          <span style={{fontSize:14,fontWeight: chat.unread>0?600:500,color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"60%"}}>{name}</span>
+          <span style={{fontSize:10,color:T.text3,flexShrink:0}}>{chat.last ? timeAgo(chat.last.ts) : ""}</span>
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span style={{fontSize:12,color:chat.unread>0?T.text2:T.text3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}}>{lastText.slice(0,45)}{lastText.length>45?"...":""}</span>
+          {chat.unread > 0 && <span style={{background:T.accent,color:"#fff",borderRadius:99,fontSize:10,padding:"1px 7px",fontWeight:700,flexShrink:0,marginLeft:8}}>{chat.unread}</span>}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+/* ══ CHAT VIEW ══ */
+function ChatView({chat, messages, composeText, setComposeText, sendMsg, onBack, me, bottomRef, users, setModal, typingUsers, announcements}) {
+  const key = chat.type === "dm" ? `dm_${chat.id}` : chat.id;
+  const typingInfo = typingUsers?.[key] || null;
+  const msgs = messages[key] || [];
+  const isAnnounce = chat.type === "announce";
+
+  let headerName, headerSub, headerColor;
+  if (chat.type === "dm") {
+    const u = USERS.find(x=>x.id===chat.id);
+    headerName = u?.name; headerSub = `${u?.role} · ${u?.dept}`; headerColor = u?.color;
+  } else if (chat.type === "group") {
+    const g = GROUPS.find(x=>x.id===chat.id);
+    headerName = g?.name; headerSub = `${g?.members?.length} miembros`; headerColor = g?.color;
+  } else {
+    headerName = "Anuncios Globales"; headerSub = "Comunicaciones de la empresa"; headerColor = T.accent;
+  }
+
+  // announcements passed as prop
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",height:"100%",background:T.bg}}>
+      {/* Header */}
+      <div style={{padding:"12px 16px",borderBottom:`1px solid ${T.border}`,display:"flex",alignItems:"center",gap:12,background:T.surface,flexShrink:0}}>
+        <button onClick={onBack} style={{padding:"6px",borderRadius:10,background:T.bg3,border:`1px solid ${T.border}`,fontSize:16,color:T.text2}}>←</button>
+        <div style={{flex:1}}>
+          <div style={{fontSize:15,fontWeight:600,color:T.text}}>{headerName}</div>
+          {typingInfo ? (
+            <div style={{display:"flex",alignItems:"center",gap:5,animation:"fadeIn .2s ease-out"}}>
+              <div style={{display:"flex",gap:2,alignItems:"center"}}>
+                <div className="typing-dot" style={{width:4,height:4,borderRadius:"50%",background:T.accent2}}/>
+                <div className="typing-dot" style={{width:4,height:4,borderRadius:"50%",background:T.accent2}}/>
+                <div className="typing-dot" style={{width:4,height:4,borderRadius:"50%",background:T.accent2}}/>
+              </div>
+              <span style={{fontSize:11,color:T.accent2,fontStyle:"italic"}}>escribiendo...</span>
+            </div>
+          ) : (
+            <div style={{fontSize:11,color:T.text3}}>{headerSub}</div>
+          )}
+        </div>
+        {chat.type === "dm" && (
+          <button onClick={()=>setModal({type:"assignTask",data:{assignTo:chat.id}})} style={{padding:"7px 12px",borderRadius:10,background:`${T.accent}22`,border:`1px solid ${T.accent}44`,fontSize:12,color:T.accent2,fontWeight:500}}>
+            + Tarea
+          </button>
+        )}
+      </div>
+
+      {/* Messages */}
+      {isAnnounce ? (
+        <div className="scroll" style={{flex:1,overflowY:"auto",padding:"16px"}}>
+          <AnnouncementsFeed chat={chat} setModal={setModal} me={me} announcements={announcements}/>
+        </div>
+      ) : (
+        <div className="scroll" style={{flex:1,overflowY:"auto",padding:"12px 16px",display:"flex",flexDirection:"column",gap:4}}>
+          {msgs.length === 0 && <div style={{textAlign:"center",padding:40,color:T.text3,fontSize:13}}>Inicia la conversación</div>}
+          {msgs.map((msg, i) => {
+            const isMe = msg.from === "me";
+            const sender = isMe ? me : (USERS.find(u=>u.id===msg.from));
+            const showAvatar = !isMe && (i===0 || msgs[i-1]?.from !== msg.from);
+            return (
+              <div key={msg.id} className="msg-in" style={{display:"flex",flexDirection:isMe?"row-reverse":"row",gap:8,alignItems:"flex-end",marginBottom:2}}>
+                {!isMe && (showAvatar ? <Avatar user={sender} size={28}/> : <div style={{width:28}}/>)}
+                <div style={{
+                  maxWidth:"75%",padding:"9px 13px",
+                  borderRadius: isMe?"16px 16px 4px 16px":"16px 16px 16px 4px",
+                  background: isMe ? `linear-gradient(135deg,${T.accent},${T.accent3})` : T.surface2,
+                  border: isMe ? "none" : `1px solid ${T.border}`,
+                  boxShadow: isMe ? `0 4px 12px ${T.accent}33` : "none",
+                }}>
+                  {!isMe && showAvatar && chat.type === "group" && (
+                    <div style={{fontSize:10,color:sender?.color||T.accent2,fontWeight:600,marginBottom:3}}>{sender?.name}</div>
+                  )}
+                  <div style={{fontSize:14,color:isMe?"#fff":T.text,lineHeight:1.4}}>{msg.text}</div>
+                  <div style={{fontSize:10,color:isMe?"rgba(255,255,255,.5)":T.text3,marginTop:3,textAlign:isMe?"right":"left"}}>{timeAgo(msg.ts)}</div>
+                </div>
+              </div>
+            );
+          })}
+          {/* Typing indicator bubble */}
+          {typingInfo && (
+            <div className="msg-in" style={{display:"flex",flexDirection:"row",gap:8,alignItems:"flex-end",marginBottom:4}}>
+              <Avatar user={typingInfo.userId} size={28}/>
+              <div style={{
+                padding:"10px 14px",
+                borderRadius:"16px 16px 16px 4px",
+                background:T.surface2,
+                border:`1px solid ${T.border}`,
+                display:"flex",alignItems:"center",gap:5,
+                minWidth:56,
+              }}>
+                <div className="typing-dot" style={{width:6,height:6,borderRadius:"50%",background:T.text3}}/>
+                <div className="typing-dot" style={{width:6,height:6,borderRadius:"50%",background:T.text3}}/>
+                <div className="typing-dot" style={{width:6,height:6,borderRadius:"50%",background:T.text3}}/>
+              </div>
+            </div>
+          )}
+          <div ref={bottomRef}/>
+        </div>
+      )}
+
+      {/* Compose */}
+      {!isAnnounce && (
+        <div style={{padding:"8px 12px",paddingBottom:"max(8px,env(safe-area-inset-bottom))",background:T.surface,borderTop:`1px solid ${T.border}`,display:"flex",gap:8,alignItems:"flex-end",flexShrink:0}}>
+          <div style={{flex:1,background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:16,display:"flex",alignItems:"center",padding:"8px 14px",gap:8}}>
+            <textarea
+              value={composeText}
+              onChange={e=>setComposeText(e.target.value)}
+              onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMsg();}}}
+              placeholder="Escribe un mensaje..."
+              rows={1}
+              style={{flex:1,fontSize:14,color:T.text,lineHeight:1.4,maxHeight:80,overflowY:"auto",background:"transparent"}}
+            />
+          </div>
+          <button onClick={sendMsg} style={{
+            width:44,height:44,borderRadius:14,flexShrink:0,
+            background: composeText.trim() ? `linear-gradient(135deg,${T.accent},${T.accent3})` : T.bg3,
+            border:`1px solid ${composeText.trim()?T.accent:T.border}`,
+            display:"flex",alignItems:"center",justifyContent:"center",
+            fontSize:20,transition:"all .15s",
+            boxShadow: composeText.trim() ? `0 4px 12px ${T.accent}44` : "none",
+          }}>➤</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AnnouncementsFeed({chat, setModal, me, announcements}) {
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:16}}>
+      {me.role === "Admin" || me.role === "Manager" ? (
+        <button onClick={()=>setModal({type:"newAnnouncement"})} style={{
+          width:"100%",padding:"12px",borderRadius:14,
+          border:`1px dashed ${T.accent}66`,background:`${T.accent}08`,
+          fontSize:13,color:T.accent2,fontWeight:500,display:"flex",alignItems:"center",justifyContent:"center",gap:8,
+        }}>
+          <span style={{fontSize:18}}>📣</span> Crear anuncio global
+        </button>
+      ) : null}
+      {announcements.map(ann => {
+        const isLvlUp = ann.isLevelUp;
+        const authorUser = ann.from==="system" ? SYSTEM_USER : USERS.find(u=>u.id===ann.from);
+        return (
+          <div key={ann.id} style={{
+            background: isLvlUp
+              ? `linear-gradient(135deg,${(ann.levelData?.color||T.accent)}18,${T.surface})`
+              : T.surface,
+            border:`2px solid ${ann.pinned?T.accent+"66":isLvlUp?(ann.levelData?.color||T.accent)+"55":T.border}`,
+            borderRadius:16,padding:"16px",animation:"fadeUp .3s ease-out",
+            boxShadow: isLvlUp ? `0 4px 24px ${(ann.levelData?.color||T.accent)}22` : "none",
+          }}>
+            {/* Level up special header */}
+            {isLvlUp && (
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,padding:"8px 12px",background:`${(ann.levelData?.color||T.accent)}18`,borderRadius:10,border:`1px solid ${(ann.levelData?.color||T.accent)}33`}}>
+                <span style={{fontSize:30}}>{ann.levelData?.icon||"⭐"}</span>
+                <div>
+                  <div style={{fontSize:11,fontWeight:700,color:ann.levelData?.color||T.accent,textTransform:"uppercase",letterSpacing:1}}>¡Subida de Nivel!</div>
+                  <div style={{fontSize:13,fontWeight:600,color:T.text}}>Nivel {ann.levelData?.l} — {ann.levelData?.t}</div>
+                </div>
+                <span style={{marginLeft:"auto",fontSize:24,animation:"fadeIn .5s ease-out"}}>🎊</span>
+              </div>
+            )}
+            {ann.pinned && !isLvlUp && <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:10}}>
+              <span style={{fontSize:11,color:T.accent2,fontWeight:600,background:`${T.accent}22`,padding:"2px 8px",borderRadius:99}}>📌 Fijado</span>
+            </div>}
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+              {authorUser ? <Avatar user={authorUser} size={36}/> : <div style={{width:36,height:36,borderRadius:"50%",background:T.bg3,border:`1px solid ${T.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>🔔</div>}
+              <div>
+                <div style={{fontSize:13,fontWeight:600,color:T.text}}>{authorUser?.name||"Sistema"}</div>
+                <div style={{fontSize:11,color:T.text3}}>{timeAgo(ann.ts)}</div>
+              </div>
+            </div>
+            <div style={{fontSize:15,fontWeight:700,color:isLvlUp?(ann.levelData?.color||T.accent):T.text,marginBottom:8}}>{ann.title}</div>
+            <div style={{fontSize:13,color:T.text2,lineHeight:1.6}}>{ann.text}</div>
+            <div style={{display:"flex",gap:8,marginTop:12,flexWrap:"wrap"}}>
+              {Object.entries(ann.reactions||{}).map(([emoji,users]) => (
+                <span key={emoji} style={{background:T.bg3,border:`1px solid ${T.border}`,borderRadius:99,padding:"3px 10px",fontSize:12,display:"flex",alignItems:"center",gap:4,cursor:"pointer"}}>
+                  {emoji} <span style={{color:T.text2}}>{users.length}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ══ TASKS TAB ══ */
+function TasksTab({tasks, view, setView, onUpdate, setModal, me, users, overdue}) {
+  const myTasks = tasks.filter(t => t.assignedTo === "me");
+  const teamTasks = tasks.filter(t => t.assignedBy === "me" && t.assignedTo !== "me");
+  const allTasks = tasks;
+  const displayed = view === "my" ? myTasks : view === "team" ? teamTasks : allTasks;
+  const pending = myTasks.filter(t=>t.status!=="completed").length;
+
+  return (
+    <div className="scroll" style={{flex:1,overflowY:"auto"}}>
+      <div style={{padding:"8px 16px 0"}}>
+        {/* Stats row */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:12}}>
+          {[
+            {label:"Pendientes",val:pending,color:T.orange,icon:"○"},
+            {label:"Completadas",val:myTasks.filter(t=>t.status==="completed").length,color:T.green,icon:"●"},
+            {label:"Vencidas",val:overdue.length,color:T.red,icon:"⚠"},
+          ].map(s => (
+            <div key={s.label} style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"10px 12px",textAlign:"center"}}>
+              <div style={{fontSize:20,fontWeight:700,color:s.color}}>{s.val}</div>
+              <div style={{fontSize:10,color:T.text3,marginTop:1}}>{s.label}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* View selector */}
+        <div style={{display:"flex",gap:6,background:T.surface,borderRadius:12,padding:4,marginBottom:12}}>
+          {[["my","Mis Tareas"],["team","Mi Equipo"],["all","Todas"]].map(([v,l])=>(
+            <button key={v} onClick={()=>setView(v)} style={{
+              flex:1,padding:"7px",borderRadius:9,fontSize:12,fontWeight:500,
+              background:view===v?T.bg4:"transparent",
+              color:view===v?T.text:T.text3,
+              border:view===v?`1px solid ${T.border2}`:"1px solid transparent",
+              transition:"all .15s",
+            }}>{l}</button>
+          ))}
+        </div>
+
+        {/* New Task button */}
+        <button onClick={()=>setModal({type:"newTask"})} style={{
+          width:"100%",padding:"11px",borderRadius:12,marginBottom:12,
+          border:`1px dashed ${T.accent}66`,background:`${T.accent}08`,
+          fontSize:13,color:T.accent2,fontWeight:500,display:"flex",alignItems:"center",justifyContent:"center",gap:8,
+        }}>
+          <span style={{fontSize:18}}>➕</span> Nueva tarea
+        </button>
+      </div>
+
+      {/* Task list */}
+      <div style={{padding:"0 16px 16px",display:"flex",flexDirection:"column",gap:8}}>
+        {displayed.length === 0 && <div style={{textAlign:"center",padding:40,color:T.text3,fontSize:13}}>No hay tareas en esta vista</div>}
+        {displayed.map(t => (
+          <TaskCard key={t.id} task={t} onUpdate={onUpdate} setModal={setModal} me={me} users={users}/>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TaskCard({task, onUpdate, setModal, me, users}) {
+  const pc = PRIORITY_CFG[task.priority];
+  const sc = STATUS_CFG[task.status];
+  const assignedUser = task.assignedTo === "me" ? {name:"Tú",avatar:"YO",color:T.accent} : USERS.find(u=>u.id===task.assignedTo);
+  const assignedBy = task.assignedBy === "me" ? {name:"Tú"} : USERS.find(u=>u.id===task.assignedBy);
+  const isOverdue = task.status !== "completed" && new Date(task.dueDate) < new Date();
+  const isMyTask = task.assignedTo === "me";
+
+  return (
+    <div className="fade-up" style={{
+      background:T.surface,border:`1px solid ${isOverdue?T.red+"44":T.border}`,
+      borderRadius:16,padding:"14px",
+      borderLeft:`3px solid ${pc.color}`,
+      transition:"all .15s",
+    }}>
+      {/* Top row */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+        <div style={{flex:1,marginRight:8}}>
+          <div style={{fontSize:14,fontWeight:600,color:task.status==="completed"?T.text3:T.text,textDecoration:task.status==="completed"?"line-through":"none",lineHeight:1.3}}>{task.title}</div>
+        </div>
+        <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
+          <Badge label={pc.label} color={pc.color} bg={pc.bg}/>
+        </div>
+      </div>
+
+      {/* Desc */}
+      {task.desc && <div style={{fontSize:12,color:T.text3,marginBottom:8,lineHeight:1.4}}>{task.desc}</div>}
+
+      {/* Meta */}
+      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
+        {task.tags?.map(tag => (
+          <span key={tag} style={{background:T.bg3,border:`1px solid ${T.border}`,borderRadius:6,padding:"2px 7px",fontSize:10,color:T.text3}}>#{tag}</span>
+        ))}
+      </div>
+
+      {/* Bottom row */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{display:"flex",alignItems:"center",gap:5}}>
+            <span style={{fontSize:11,color:sc.color}}>{sc.icon}</span>
+            <span style={{fontSize:11,color:sc.color,fontWeight:500}}>{sc.label}</span>
+          </div>
+          <span style={{color:T.border}}>·</span>
+          <div style={{fontSize:11,color:isOverdue?T.red:T.text3}}>
+            {isOverdue?"⚠ ":""}{fmtDate(task.dueDate)}
+          </div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:6}}>
+          <div style={{background:`${T.accent}22`,border:`1px solid ${T.accent}33`,borderRadius:99,padding:"1px 7px",fontSize:10,color:T.accent2,fontWeight:600}}>+{task.xpReward} XP</div>
+        </div>
+      </div>
+
+      {/* Actions */}
+      {isMyTask && task.status !== "completed" && (
+        <div style={{display:"flex",gap:6,marginTop:10,paddingTop:10,borderTop:`1px solid ${T.border}`}}>
+          {task.status === "pending" && (
+            <button onClick={()=>onUpdate(task.id,"in_progress")} style={{flex:1,padding:"7px",borderRadius:9,background:T.bg3,border:`1px solid ${T.border}`,fontSize:12,color:T.text2,fontWeight:500}}>
+              Iniciar
+            </button>
+          )}
+          <button onClick={()=>onUpdate(task.id,"completed")} style={{
+            flex:2,padding:"7px",borderRadius:9,
+            background:`${T.green}22`,border:`1px solid ${T.green}44`,
+            fontSize:12,color:T.green,fontWeight:600,
+          }}>
+            ✓ Completar (+{task.xpReward} XP)
+          </button>
+          <button onClick={()=>setModal({type:"editTask",data:task})} style={{width:32,height:32,borderRadius:9,background:T.bg3,border:`1px solid ${T.border}`,fontSize:14,flexShrink:0}}>⋯</button>
+        </div>
+      )}
+      {!isMyTask && (
+        <div style={{display:"flex",alignItems:"center",gap:8,marginTop:10,paddingTop:10,borderTop:`1px solid ${T.border}`}}>
+          <Avatar user={assignedUser} size={22}/>
+          <span style={{fontSize:11,color:T.text3}}>Asignada a <span style={{color:T.text2}}>{assignedUser?.name}</span></span>
+          <button onClick={()=>setModal({type:"editTask",data:task})} style={{marginLeft:"auto",padding:"4px 10px",borderRadius:8,background:T.bg3,border:`1px solid ${T.border}`,fontSize:11,color:T.text2}}>
+            Editar
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ══ PEOPLE TAB ══ */
+function PeopleTab({users, me, setModal, setActiveChat}) {
+  const [view, setView] = useState("list"); // list | org
+  const byDept = useMemo(() => {
+    const map = {};
+    users.forEach(u => { if (!map[u.dept]) map[u.dept] = []; map[u.dept].push(u); });
+    return map;
+  }, [users]);
+
+  return (
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+      {/* View toggle */}
+      <div style={{display:"flex",gap:6,padding:"10px 16px 4px",background:T.bg,borderBottom:`1px solid ${T.border}`,flexShrink:0}}>
+        <button onClick={()=>setView("list")} style={{flex:1,padding:"8px",borderRadius:10,fontSize:12,fontWeight:500,background:view==="list"?T.surface:T.bg,border:`1px solid ${view==="list"?T.border2:"transparent"}`,color:view==="list"?T.text:T.text3}}>👥 Lista</button>
+        <button onClick={()=>setView("org")} style={{flex:1,padding:"8px",borderRadius:10,fontSize:12,fontWeight:500,background:view==="org"?T.surface:T.bg,border:`1px solid ${view==="org"?T.accent+"44":"transparent"}`,color:view==="org"?T.accent2:T.text3}}>🌳 Organigrama</button>
+      </div>
+      {view==="org" ? (
+        <div className="scroll" style={{flex:1,overflowY:"auto",padding:"16px"}}>
+          <OrgChartView users={users} me={me} onChat={uid=>setActiveChat({type:"dm",id:uid})} onProfile={u=>setModal({type:"userProfile",data:u})} readonly/>
+        </div>
+      ) : (
+      <div className="scroll" style={{flex:1,overflowY:"auto",padding:"12px 16px"}}>
+      {Object.entries(byDept).map(([dept, members]) => (
+        <div key={dept} style={{marginBottom:20}}>
+          <div style={{fontSize:11,fontWeight:600,color:T.text3,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>{dept}</div>
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+            {members.map(u => (
+              <div key={u.id} style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:14,padding:"10px 12px",display:"flex",alignItems:"center",gap:12}}>
+                <Avatar user={u} size={44} showBadge/>
+                <div style={{flex:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <span style={{fontSize:14,fontWeight:600,color:T.text}}>{u.name}</span>
+                    {u.badges.slice(0,3).map((b,i)=><span key={i} style={{fontSize:13}}>{b}</span>)}
+                  </div>
+                  <div style={{fontSize:11,color:T.text3,marginTop:1}}>{u.role}</div>
+                  <XPBar xp={u.xp} compact/>
+                </div>
+                <div style={{display:"flex",gap:6}}>
+                  <button onClick={()=>setActiveChat({type:"dm",id:u.id})} style={{width:34,height:34,borderRadius:10,background:`${T.accent}18`,border:`1px solid ${T.accent}33`,fontSize:16,display:"flex",alignItems:"center",justifyContent:"center"}}>💬</button>
+                  <button onClick={()=>setModal({type:"userProfile",data:u})} style={{width:34,height:34,borderRadius:10,background:T.bg3,border:`1px solid ${T.border}`,fontSize:16,display:"flex",alignItems:"center",justifyContent:"center"}}>👤</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+    )}
+    </div>
+  );
+}
+
+/* ══ PROFILE TAB ══ */
+function ProfileTab({me, userStats, achievements, tasks, setModal, soundEnabled, soundVolume}) {
+  const lv = getLv(me.xp);
+  const next = xpToNext(me.xp);
+  const pct = Math.min(100, ((me.xp - lv.xp) / (next - lv.xp)) * 100);
+  const completed = tasks.filter(t=>t.assignedTo==="me"&&t.status==="completed").length;
+
+  return (
+    <div className="scroll" style={{flex:1,overflowY:"auto",padding:"16px"}}>
+      {/* Profile card */}
+      <div style={{
+        background:`linear-gradient(135deg,${T.surface},${T.surface2})`,
+        border:`1px solid ${T.border}`,borderRadius:20,padding:"20px",marginBottom:16,
+        position:"relative",overflow:"hidden",
+      }}>
+        <div style={{position:"absolute",top:-30,right:-30,width:120,height:120,borderRadius:"50%",background:`${me.color}11`}}/>
+        <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:16}}>
+          <div style={{
+            width:64,height:64,borderRadius:20,
+            background:`linear-gradient(135deg,${me.color}88,${me.color}44)`,
+            border:`2px solid ${me.color}66`,
+            display:"flex",alignItems:"center",justifyContent:"center",
+            fontSize:24,fontWeight:700,color:"#fff",
+            boxShadow:`0 8px 24px ${me.color}44`,
+          }}>{me.avatar}</div>
+          <div>
+            <div style={{fontSize:18,fontWeight:700,color:T.text,letterSpacing:"-0.3px"}}>{me.name}</div>
+            <div style={{fontSize:12,color:T.text2,marginTop:2}}>{me.role} · {me.dept}</div>
+            <div style={{display:"flex",gap:6,marginTop:6}}>
+              {me.badges.map((b,i)=><span key={i} style={{fontSize:18}}>{b}</span>)}
+            </div>
+          </div>
+        </div>
+        <div style={{marginBottom:12}}>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+            <span style={{fontSize:13,fontWeight:600,color:T.text}}>{lv.icon||"⭐"} LV{lv.l} · {lv.t}</span>
+            <span style={{fontSize:12,color:T.accent2,fontWeight:500,fontFamily:"'DM Mono',monospace"}}>{me.xp} / {next} XP</span>
+          </div>
+          <div style={{height:8,background:T.bg4,borderRadius:8,overflow:"hidden"}}>
+            <div style={{height:"100%",width:pct+"%",background:`linear-gradient(90deg,${T.accent},${T.accent2})`,borderRadius:8,transition:"width .8s ease",boxShadow:`0 0 8px ${T.accent}66`}}/>
+          </div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:8}}>
+          {[["💬",userStats.messages_sent,"Mensajes"],["✅",completed,"Completadas"],["📋",userStats.tasks_assigned,"Asignadas"],["🔥",userStats.streak,"Racha"]].map(([i,v,l])=>(
+            <div key={l} style={{background:T.bg3,borderRadius:10,padding:"8px",textAlign:"center"}}>
+              <div style={{fontSize:16}}>{i}</div>
+              <div style={{fontSize:16,fontWeight:700,color:T.text}}>{v}</div>
+              <div style={{fontSize:9,color:T.text3}}>{l}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Sound Settings shortcut */}
+      <button onClick={()=>setModal({type:"soundSettings"})} style={{
+        width:"100%",marginBottom:16,
+        display:"flex",alignItems:"center",gap:14,
+        background:T.surface,border:`1px solid ${T.border}`,borderRadius:16,padding:"14px 16px",
+        textAlign:"left",
+      }}>
+        <div style={{width:44,height:44,borderRadius:14,background:`${T.accent}18`,border:`1px solid ${T.accent}33`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>
+          {soundEnabled ? "🔔" : "🔕"}
+        </div>
+        <div style={{flex:1}}>
+          <div style={{fontSize:14,fontWeight:600,color:T.text}}>Sonidos de notificación</div>
+          <div style={{fontSize:12,color:T.text3,marginTop:2}}>
+            {soundEnabled ? `Activados · Volumen ${Math.round(soundVolume*100)}%` : "Desactivados"}
+          </div>
+        </div>
+        <div style={{fontSize:12,color:T.text3}}>⚙️</div>
+      </button>
+
+      {/* Year History */}
+      {(me.yearHistory||[]).length > 0 && (
+        <div style={{marginBottom:16}}>
+          <div style={{fontSize:14,fontWeight:600,color:T.text,marginBottom:10}}>📅 Historial por Año</div>
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+            {[...(me.yearHistory||[])].sort((a,b)=>b.year-a.year).map((h,i)=>(
+              <div key={i} style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:14,padding:"12px 14px",display:"flex",alignItems:"center",gap:12}}>
+                <div style={{width:48,height:48,borderRadius:14,background:`${T.accent}18`,border:`1px solid ${T.accent}33`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,flexShrink:0}}>{h.icon||"⭐"}</div>
+                <div style={{flex:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:3}}>
+                    <span style={{fontSize:16,fontWeight:700,color:T.text}}>{h.year}</span>
+                    <span style={{background:`${T.accent}22`,border:`1px solid ${T.accent}33`,borderRadius:99,padding:"1px 8px",fontSize:10,color:T.accent2,fontWeight:600}}>LV{h.maxLevel}</span>
+                  </div>
+                  <div style={{fontSize:13,fontWeight:600,color:T.text2}}>{h.maxLevelName}</div>
+                  <div style={{fontSize:11,color:T.text3,marginTop:1,fontFamily:"'DM Mono',monospace"}}>{h.xp} XP acumulados</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Achievements */}
+      <div style={{marginBottom:16}}>
+        <div style={{fontSize:14,fontWeight:600,color:T.text,marginBottom:12}}>🏆 Logros</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+          {achievements.map(ach => {
+            const earned = me.badges.includes(ach.icon);
+            return (
+              <div key={ach.id} style={{
+                background:earned?`${T.accent}12`:T.surface,
+                border:`1px solid ${earned?T.accent+"44":T.border}`,
+                borderRadius:14,padding:"12px",
+                opacity:earned?1:.6,
+                animation: earned ? "badgePop .4s ease-out" : "none",
+              }}>
+                <div style={{fontSize:28,marginBottom:6}}>{ach.icon}</div>
+                <div style={{fontSize:13,fontWeight:600,color:earned?T.accent2:T.text}}>{ach.name}</div>
+                <div style={{fontSize:11,color:T.text3,marginTop:2,lineHeight:1.3}}>{ach.desc}</div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:8}}>
+                  <span style={{fontSize:11,color:T.accent2,fontFamily:"'DM Mono',monospace"}}>+{ach.xpReward} XP</span>
+                  {earned && <span style={{fontSize:10,color:T.green,fontWeight:600}}>✓ Obtenido</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ══ ADMIN TAB ══ */
+function AdminTab({users, setUsers, achievements, setAchievements, tasks, setTasks, adminTab, setAdminTab, setModal, me, addToast, levels, setLevels, onAnnualReset, areas, setAreas, askConfirm}) {
+  const isAdmin = me.role === "Admin" || me.role === "Manager";
+  const tabs = [["users","👥 Usuarios"],["org","🌳 Organigrama"],["areas","🏢 Áreas"],["achievements","🏆 Logros"],["xp","⚡ XP Config"],["levels","🎖️ Niveles"],["stats","📊 Stats"]];
+
+  if (!isAdmin) return (
+    <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:32,gap:16}}>
+      <div style={{width:72,height:72,borderRadius:24,background:"rgba(239,68,68,.12)",border:"1px solid rgba(239,68,68,.3)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:36}}>🔒</div>
+      <div style={{textAlign:"center"}}>
+        <div style={{fontSize:17,fontWeight:700,color:T.text,marginBottom:6}}>Acceso restringido</div>
+        <div style={{fontSize:13,color:T.text3,lineHeight:1.5}}>Solo disponible para <span style={{color:T.accent2,fontWeight:600}}>Admin</span> o <span style={{color:T.accent2,fontWeight:600}}>Manager</span>.</div>
+      </div>
+      <div style={{fontSize:12,color:T.text3,textAlign:"center"}}>Usa el botón ⏻ para cerrar sesión y volver a entrar con el rol correcto.</div>
+    </div>
+  );
+
+  return (
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+      {/* Sub tabs */}
+      <div style={{display:"flex",gap:0,padding:"8px 16px",borderBottom:`1px solid ${T.border}`,overflowX:"auto",flexShrink:0}}>
+        {tabs.map(([id,label]) => (
+          <button key={id} onClick={()=>setAdminTab(id)} style={{
+            padding:"7px 12px",borderRadius:10,fontSize:12,fontWeight:500,whiteSpace:"nowrap",
+            background: adminTab===id ? `${T.accent}22` : "transparent",
+            color: adminTab===id ? T.accent2 : T.text3,
+            border: `1px solid ${adminTab===id?T.accent+"44":"transparent"}`,
+            marginRight:4,transition:"all .15s",flexShrink:0,
+          }}>{label}</button>
+        ))}
+      </div>
+
+      <div className="scroll" style={{flex:1,overflowY:"auto",padding:"16px"}}>
+        {adminTab === "users" && <AdminUsers users={users} setUsers={setUsers} setModal={setModal} addToast={addToast} askConfirm={askConfirm}/>}
+        {adminTab === "achievements" && <AdminAchievements achievements={achievements} setAchievements={setAchievements} setModal={setModal} addToast={addToast} users={users} setUsers={setUsers}/>}
+        {adminTab === "xp" && <AdminXP tasks={tasks} setTasks={setTasks} addToast={addToast}/>}
+        {adminTab === "org" && <AdminOrgChart users={users} setUsers={setUsers} addToast={addToast} me={me}/>}
+        {adminTab === "areas" && <AdminAreas areas={areas} setAreas={setAreas} users={users} setUsers={setUsers} addToast={addToast} askConfirm={askConfirm}/>}
+        {adminTab === "levels" && <AdminLevels levels={levels} setLevels={setLevels} addToast={addToast} users={users} onAnnualReset={onAnnualReset} askConfirm={askConfirm}/> }
+        {adminTab === "stats" && <AdminStats users={users} tasks={tasks}/>}
+      </div>
+    </div>
+  );
+}
+
+function AdminUsers({users, setUsers, setModal, addToast, askConfirm}) {
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:8}}>
+      {/* Create new user */}
+      <button onClick={()=>setModal({type:"createUser"})} style={{
+        width:"100%",padding:"13px",borderRadius:14,
+        border:`1px dashed ${T.green}66`,background:`${T.green}08`,
+        fontSize:14,color:T.green,fontWeight:600,
+        display:"flex",alignItems:"center",justifyContent:"center",gap:8,marginBottom:4,
+        boxShadow:`0 4px 16px ${T.green}18`,
+      }}>
+        <span style={{fontSize:20}}>➕</span> Crear nuevo usuario
+      </button>
+
+      <button onClick={()=>setModal({type:"grantAchievement"})} style={{
+        width:"100%",padding:"10px",borderRadius:12,
+        border:`1px dashed ${T.orange}55`,background:`${T.orange}06`,
+        fontSize:13,color:T.orange,fontWeight:500,
+        display:"flex",alignItems:"center",justifyContent:"center",gap:8,marginBottom:8,
+      }}>
+        <span style={{fontSize:17}}>🏅</span> Otorgar logro manual
+      </button>
+
+      {users.map(u => (
+        <div key={u.id} style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:14,padding:"12px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+            <Avatar user={u} size={40} showBadge/>
+            <div style={{flex:1}}>
+              <div style={{fontSize:14,fontWeight:600,color:T.text}}>{u.name}</div>
+              <div style={{display:"flex",alignItems:"center",gap:6,marginTop:2}}>
+                <span style={{fontSize:11,color:T.text3}}>{u.role} · {u.dept}</span>
+              </div>
+              {u.username && (
+                <div style={{display:"flex",alignItems:"center",gap:4,marginTop:3}}>
+                  <span style={{fontSize:10,color:T.text3,fontFamily:"'DM Mono',monospace",background:T.bg3,border:`1px solid ${T.border}`,borderRadius:6,padding:"1px 6px"}}>@{u.username}</span>
+                </div>
+              )}
+            </div>
+            <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>
+              <span style={{background:`${T.accent}22`,border:`1px solid ${T.accent}33`,borderRadius:99,padding:"2px 8px",fontSize:11,color:T.accent2,fontWeight:600,fontFamily:"'DM Mono',monospace"}}>{u.xp} XP</span>
+            </div>
+          </div>
+          <XPBar xp={u.xp}/>
+          <div style={{display:"flex",gap:6,marginTop:10}}>
+            <button onClick={()=>{
+              setUsers(us=>us.map(x=>x.id!==u.id?x:{...x,xp:x.xp+100}));
+              addToast("+100 XP otorgados",`A ${u.name}`,"⚡",T.accent);
+            }} style={{padding:"7px 10px",borderRadius:9,background:`${T.accent}18`,border:`1px solid ${T.accent}33`,fontSize:12,color:T.accent2,fontWeight:500}}>
+              +100 XP
+            </button>
+            <button onClick={()=>setModal({type:"editUser",data:u})} style={{flex:1,padding:"7px",borderRadius:9,background:T.bg3,border:`1px solid ${T.border}`,fontSize:12,color:T.text2,fontWeight:500}}>
+              ✏️ Editar
+            </button>
+            <button onClick={()=>{
+              (askConfirm||window.confirm)
+                ? (askConfirm
+                    ? askConfirm(`¿Eliminar a ${u.name}? Esta acción no se puede deshacer.`, ()=>{
+                        setUsers(us=>us.filter(x=>x.id!==u.id));
+                        AUTH_REGISTRY = AUTH_REGISTRY.filter(a=>a.employeeId!==u.id);
+                        addToast("Usuario eliminado",u.name,"🗑️",T.red);
+                      })
+                    : null)
+                : null;
+              if(!askConfirm && window.confirm(`¿Eliminar a ${u.name}?`)){
+                setUsers(us=>us.filter(x=>x.id!==u.id));
+                AUTH_REGISTRY = AUTH_REGISTRY.filter(a=>a.employeeId!==u.id);
+                addToast("Usuario eliminado",u.name,"🗑️",T.red);
+              }
+            }} style={{width:34,height:34,borderRadius:9,background:"rgba(239,68,68,.1)",border:`1px solid rgba(239,68,68,.3)`,fontSize:16,color:T.red,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}}>
+              🗑️
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+
+/* ══ ADMIN AREAS (Áreas de Trabajo) ══ */
+function AdminAreas({areas, setAreas, users, setUsers, addToast, askConfirm}) {
+  const [newArea, setNewArea] = useState("");
+  const [editIdx, setEditIdx] = useState(null);
+  const [editVal, setEditVal] = useState("");
+
+  function addArea() {
+    const trimmed = newArea.trim();
+    if (!trimmed) return;
+    if (areas.includes(trimmed)) { addToast("Ya existe","Ese nombre de área ya existe","⚠️",T.orange); return; }
+    setAreas(a => [...a, trimmed]);
+    setNewArea("");
+    addToast("Área creada", trimmed, "🏢", T.green);
+  }
+
+  function startEdit(idx) {
+    setEditIdx(idx);
+    setEditVal(areas[idx]);
+  }
+
+  function saveEdit() {
+    const trimmed = editVal.trim();
+    if (!trimmed || editIdx === null) return;
+    const oldName = areas[editIdx];
+    setAreas(a => a.map((x,i) => i===editIdx ? trimmed : x));
+    // Update all users with this area
+    setUsers(us => us.map(u => u.dept===oldName ? {...u, dept:trimmed} : u));
+    addToast("Área actualizada", `"${oldName}" → "${trimmed}"`, "✏️", T.blue);
+    setEditIdx(null);
+  }
+
+  function deleteArea(idx) {
+    const name = areas[idx];
+    const usersInArea = users.filter(u => u.dept===name).length;
+    if (usersInArea > 0) {
+      addToast("No se puede eliminar", `Hay ${usersInArea} usuario(s) en "${name}". Reasígnalos primero.`, "⚠️", T.red);
+      return;
+    }
+    const doDelete = () => {
+      setAreas(a => a.filter((_,i) => i!==idx));
+      addToast("Área eliminada", name, "🗑️", T.red);
+    };
+    if (askConfirm) askConfirm(`¿Eliminar el área "${name}"?`, doDelete);
+    else if (window.confirm(`¿Eliminar el área "${name}"?`)) doDelete();
+  }
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:12}}>
+      {/* Header info */}
+      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:14,padding:"14px"}}>
+        <div style={{fontSize:14,fontWeight:700,color:T.text,marginBottom:4}}>🏢 Áreas de Trabajo</div>
+        <div style={{fontSize:12,color:T.text3,lineHeight:1.5}}>
+          Gestiona las áreas de la empresa. Al renombrar un área, todos los usuarios asignados se actualizan automáticamente.
+        </div>
+      </div>
+
+      {/* Add new area */}
+      <div style={{background:T.surface,border:`1px dashed ${T.green}55`,borderRadius:14,padding:"14px"}}>
+        <div style={{fontSize:11,fontWeight:600,color:T.text2,textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>Nueva Área</div>
+        <div style={{display:"flex",gap:8}}>
+          <input
+            value={newArea}
+            onChange={e=>setNewArea(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&addArea()}
+            placeholder="Ej: Diseño, Legal, Soporte..."
+            style={{flex:1,background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 14px",fontSize:14,color:T.text}}
+          />
+          <button onClick={addArea} style={{
+            padding:"11px 18px",borderRadius:12,fontSize:14,fontWeight:600,
+            background:`linear-gradient(135deg,${T.green},${T.green}cc)`,
+            border:"none",color:"#fff",
+            boxShadow:`0 4px 12px ${T.green}44`,flexShrink:0,
+          }}>➕ Agregar</button>
+        </div>
+      </div>
+
+      {/* Areas list */}
+      <div style={{display:"flex",flexDirection:"column",gap:6}}>
+        {areas.map((area, idx) => {
+          const count = users.filter(u=>u.dept===area).length;
+          const isEditing = editIdx === idx;
+          return (
+            <div key={idx} style={{
+              background:T.surface,border:`1px solid ${isEditing?T.accent:T.border}`,
+              borderRadius:14,padding:"12px 14px",
+              borderLeft:`3px solid ${isEditing?T.accent:T.border2}`,
+              transition:"all .15s",
+            }}>
+              {isEditing ? (
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  <input
+                    value={editVal}
+                    onChange={e=>setEditVal(e.target.value)}
+                    onKeyDown={e=>{ if(e.key==="Enter")saveEdit(); if(e.key==="Escape")setEditIdx(null); }}
+                    autoFocus
+                    style={{flex:1,background:T.bg3,border:`1px solid ${T.accent}`,borderRadius:10,padding:"8px 12px",fontSize:14,color:T.text,fontWeight:600}}
+                  />
+                  <button onClick={saveEdit} style={{padding:"8px 14px",borderRadius:10,background:`${T.accent}22`,border:`1px solid ${T.accent}44`,fontSize:13,color:T.accent2,fontWeight:600}}>✓ Guardar</button>
+                  <button onClick={()=>setEditIdx(null)} style={{padding:"8px 12px",borderRadius:10,background:T.bg3,border:`1px solid ${T.border}`,fontSize:13,color:T.text3}}>✕</button>
+                </div>
+              ) : (
+                <div style={{display:"flex",alignItems:"center",gap:12}}>
+                  <div style={{width:36,height:36,borderRadius:10,background:`${T.accent}18`,border:`1px solid ${T.accent}22`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>🏢</div>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:14,fontWeight:600,color:T.text}}>{area}</div>
+                    <div style={{fontSize:11,color:T.text3,marginTop:1}}>
+                      {count === 0 ? "Sin usuarios asignados" : `${count} usuario${count>1?"s":""} asignado${count>1?"s":""}`}
+                    </div>
+                  </div>
+                  {count > 0 && (
+                    <span style={{background:`${T.accent}18`,border:`1px solid ${T.accent}33`,borderRadius:99,padding:"2px 9px",fontSize:11,color:T.accent2,fontWeight:600,flexShrink:0}}>
+                      👥 {count}
+                    </span>
+                  )}
+                  <div style={{display:"flex",gap:6,flexShrink:0}}>
+                    <button onClick={()=>startEdit(idx)} style={{width:32,height:32,borderRadius:9,background:T.bg3,border:`1px solid ${T.border}`,fontSize:15,color:T.text2,display:"flex",alignItems:"center",justifyContent:"center"}}>✏️</button>
+                    <button onClick={()=>deleteArea(idx)} style={{width:32,height:32,borderRadius:9,background:"rgba(239,68,68,.1)",border:"1px solid rgba(239,68,68,.25)",fontSize:15,color:T.red,display:"flex",alignItems:"center",justifyContent:"center"}}>🗑️</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {areas.length === 0 && (
+        <div style={{textAlign:"center",padding:"32px",color:T.text3,fontSize:13}}>
+          No hay áreas creadas. Agrega la primera arriba.
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+/* ══ ORG CHART VIEW (shared) ══ */
+function OrgChartView({users, me, onChat, onProfile, readonly}) {
+  // Find roots (no boss, or boss not in users)
+  const allIds = users.map(u=>u.id);
+  const roots = users.filter(u => !u.reportsTo || !allIds.includes(u.reportsTo));
+
+  function OrgNode({user, depth}) {
+    const children = users.filter(u => u.reportsTo === user.id);
+    const lv = getLv(user.xp||0);
+    const isMe = user.id === me?.id || user.id === "me";
+    return (
+      <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:0}}>
+        {/* Node card */}
+        <div style={{
+          background: isMe ? `${T.accent}18` : T.surface,
+          border: `2px solid ${isMe ? T.accent : user.color+"66"}`,
+          borderRadius:14,padding:"10px 14px",
+          display:"flex",flexDirection:"column",alignItems:"center",gap:4,
+          minWidth:110,maxWidth:130,
+          boxShadow: isMe ? `0 0 20px ${T.accent}33` : "0 2px 8px rgba(0,0,0,.3)",
+          position:"relative",
+          cursor: readonly ? "default" : "pointer",
+        }}>
+          {/* Avatar */}
+          <div style={{
+            width:44,height:44,borderRadius:"50%",
+            background:`linear-gradient(135deg,${user.color}cc,${user.color}55)`,
+            border:`2px solid ${user.color}66`,
+            display:"flex",alignItems:"center",justifyContent:"center",
+            fontSize:16,fontWeight:700,color:"#fff",
+            position:"relative",
+          }}>
+            {user.avatar}
+            <div style={{
+              position:"absolute",bottom:0,right:0,width:12,height:12,borderRadius:"50%",
+              background: user.online ? T.green : T.text3,
+              border:`2px solid ${T.surface}`,
+            }}/>
+          </div>
+          <div style={{textAlign:"center"}}>
+            <div style={{fontSize:11,fontWeight:700,color:isMe?T.accent2:T.text,lineHeight:1.2}}>{user.name.split(" ")[0]}</div>
+            <div style={{fontSize:9,color:T.text3,marginTop:1}}>{user.name.split(" ").slice(1).join(" ")}</div>
+          </div>
+          <div style={{
+            background:`${user.color}22`,border:`1px solid ${user.color}44`,
+            borderRadius:99,padding:"1px 7px",fontSize:9,color:user.color,fontWeight:600,
+          }}>{user.role}</div>
+          <div style={{fontSize:9,color:T.text3,fontWeight:500,textAlign:"center"}}>{user.dept}</div>
+          {/* XP badge */}
+          <div style={{fontSize:9,color:T.accent2,fontFamily:"'DM Mono',monospace"}}>
+            {lv.icon||"⭐"} LV{lv.l}
+          </div>
+          {/* canAssignUp badge */}
+          {user.canAssignUp && (
+            <div style={{
+              position:"absolute",top:-6,right:-6,
+              background:T.orange,border:`2px solid ${T.surface}`,
+              borderRadius:99,fontSize:8,padding:"1px 5px",color:"#fff",fontWeight:700,
+            }}>↑</div>
+          )}
+          {/* Action buttons */}
+          {!readonly && (
+            <div style={{display:"flex",gap:4,marginTop:2}}>
+              {onChat && <button onClick={()=>onChat(user.id)} style={{padding:"3px 7px",borderRadius:7,background:`${T.accent}22`,border:`1px solid ${T.accent}44`,fontSize:10,color:T.accent2,cursor:"pointer"}}>💬</button>}
+              {onProfile && <button onClick={()=>onProfile(user)} style={{padding:"3px 7px",borderRadius:7,background:T.bg3,border:`1px solid ${T.border}`,fontSize:10,color:T.text2,cursor:"pointer"}}>👤</button>}
+            </div>
+          )}
+        </div>
+
+        {/* Children */}
+        {children.length > 0 && (
+          <div style={{display:"flex",flexDirection:"column",alignItems:"center"}}>
+            {/* Vertical line down */}
+            <div style={{width:2,height:20,background:T.border2}}/>
+            {children.length > 1 ? (
+              <div style={{display:"flex",flexDirection:"column",alignItems:"center"}}>
+                {/* Horizontal connector */}
+                <div style={{position:"relative",display:"flex",alignItems:"flex-start",gap:0}}>
+                  {children.map((child, ci) => (
+                    <div key={child.id} style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"0 8px"}}>
+                      <div style={{width:2,height:16,background:T.border2}}/>
+                      <OrgNode user={child} depth={depth+1}/>
+                    </div>
+                  ))}
+                  {/* Top horizontal bar */}
+                  <div style={{
+                    position:"absolute",top:0,
+                    left:"calc(50% - " + (children.length*60) + "px)",
+                    width: (children.length*120) + "px",
+                    height:2,background:T.border2,
+                  }}/>
+                </div>
+              </div>
+            ) : (
+              <OrgNode user={children[0]} depth={depth+1}/>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{overflowX:"auto",paddingBottom:16}}>
+      {/* Legend */}
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:16,padding:"8px 12px",background:T.surface,borderRadius:12,border:`1px solid ${T.border}`}}>
+        <div style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:T.text3}}><div style={{width:8,height:8,borderRadius:"50%",background:T.green}}/> En línea</div>
+        <div style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:T.text3}}><div style={{background:T.orange,borderRadius:99,padding:"0px 5px",fontSize:9,color:"#fff",fontWeight:700}}>↑</div> Puede asignar hacia arriba</div>
+        <div style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:T.text3}}><div style={{width:16,height:2,background:T.border2}}/> Línea de reporte</div>
+      </div>
+      <div style={{display:"flex",gap:24,flexWrap:"wrap",justifyContent:"center"}}>
+        {roots.map(r => <OrgNode key={r.id} user={r} depth={0}/>)}
+      </div>
+    </div>
+  );
+}
+
+/* ══ ADMIN ORG CHART ══ */
+function AdminOrgChart({users, setUsers, addToast, me}) {
+  const [editUser, setEditUser] = useState(null);
+  const [form, setForm] = useState({reportsTo:"", canAssignUp:false});
+
+  function openEdit(u) {
+    setEditUser(u);
+    setForm({reportsTo:u.reportsTo||"", canAssignUp:u.canAssignUp||false});
+  }
+
+  function saveRelation() {
+    if (!editUser) return;
+    setUsers(us => us.map(u => u.id!==editUser.id ? u : {
+      ...u,
+      reportsTo: form.reportsTo||null,
+      canAssignUp: form.canAssignUp,
+    }));
+    addToast("Jerarquía actualizada", `${editUser.name} actualizado`, "🌳", T.accent);
+    setEditUser(null);
+  }
+
+  // Get possible bosses (not self, not already reports to editUser to avoid circular)
+  function getPossibleBosses(u) {
+    if (!u) return users;
+    return users.filter(x => x.id !== u.id);
+  }
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:14}}>
+      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:14,padding:"14px"}}>
+        <div style={{fontSize:14,fontWeight:700,color:T.text,marginBottom:4}}>🌳 Organigrama de la Empresa</div>
+        <div style={{fontSize:12,color:T.text3,lineHeight:1.5}}>
+          Define quién reporta a quién. Toca un empleado para editar su jefe y permisos de asignación.
+        </div>
+      </div>
+
+      {/* Edit panel */}
+      {editUser ? (
+        <div style={{background:T.surface,border:`2px solid ${T.accent}`,borderRadius:16,padding:"16px",animation:"fadeUp .2s ease-out"}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+            <div style={{width:40,height:40,borderRadius:"50%",background:`linear-gradient(135deg,${editUser.color}cc,${editUser.color}55)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,fontWeight:700,color:"#fff"}}>{editUser.avatar}</div>
+            <div>
+              <div style={{fontSize:14,fontWeight:700,color:T.text}}>{editUser.name}</div>
+              <div style={{fontSize:11,color:T.text3}}>{editUser.role} · {editUser.dept}</div>
+            </div>
+            <button onClick={()=>setEditUser(null)} style={{marginLeft:"auto",padding:"4px 10px",borderRadius:8,background:T.bg3,border:`1px solid ${T.border}`,fontSize:12,color:T.text2}}>✕</button>
+          </div>
+
+          <div style={{marginBottom:12}}>
+            <div style={{fontSize:11,fontWeight:600,color:T.text2,textTransform:"uppercase",letterSpacing:1,marginBottom:6}}>Reporta a (Jefe directo)</div>
+            <select value={form.reportsTo} onChange={e=>setForm(f=>({...f,reportsTo:e.target.value}))}
+              style={{width:"100%",background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 14px",fontSize:14,color:T.text}}>
+              <option value="">— Sin jefe (raíz del organigrama) —</option>
+              {getPossibleBosses(editUser).map(u=>(
+                <option key={u.id} value={u.id}>{u.name} · {u.role} · {u.dept}</option>
+              ))}
+            </select>
+          </div>
+
+          <div style={{
+            display:"flex",alignItems:"center",justifyContent:"space-between",
+            background:T.bg3,border:`1px solid ${T.border}`,borderRadius:12,padding:"12px 14px",marginBottom:14,
+          }}>
+            <div>
+              <div style={{fontSize:13,fontWeight:600,color:T.text}}>↑ Puede asignar tareas hacia arriba</div>
+              <div style={{fontSize:11,color:T.text3,marginTop:2}}>
+                Permite que este usuario asigne tareas a su jefe o superiores
+              </div>
+            </div>
+            <button onClick={()=>setForm(f=>({...f,canAssignUp:!f.canAssignUp}))} style={{
+              width:48,height:26,borderRadius:99,flexShrink:0,
+              background:form.canAssignUp?T.accent:T.bg4,
+              border:`1px solid ${form.canAssignUp?T.accent:T.border2}`,
+              position:"relative",transition:"all .2s",cursor:"pointer",
+            }}>
+              <div style={{
+                position:"absolute",top:2,
+                left:form.canAssignUp?24:2,
+                width:20,height:20,borderRadius:"50%",
+                background:"#fff",transition:"left .2s",
+                boxShadow:"0 1px 4px rgba(0,0,0,.4)",
+              }}/>
+            </button>
+          </div>
+
+          <button onClick={saveRelation} style={{
+            width:"100%",padding:"12px",borderRadius:12,fontSize:13,fontWeight:600,
+            background:`linear-gradient(135deg,${T.accent},${T.accent3})`,
+            border:"none",color:"#fff",
+            boxShadow:`0 4px 16px ${T.accent}44`,
+          }}>💾 Guardar jerarquía</button>
+        </div>
+      ) : (
+        <div style={{background:`${T.accent}08`,border:`1px dashed ${T.accent}44`,borderRadius:12,padding:"10px 14px",fontSize:12,color:T.text3,textAlign:"center"}}>
+          👇 Toca cualquier empleado en la lista para editar su jerarquía
+        </div>
+      )}
+
+      {/* User hierarchy list */}
+      <div style={{display:"flex",flexDirection:"column",gap:6}}>
+        {users.map(u => {
+          const boss = u.reportsTo ? users.find(x=>x.id===u.reportsTo) : null;
+          const reports = users.filter(x=>x.reportsTo===u.id);
+          const isEditing = editUser?.id === u.id;
+          return (
+            <button key={u.id} onClick={()=>openEdit(u)} style={{
+              background: isEditing?`${T.accent}12`:T.surface,
+              border:`2px solid ${isEditing?T.accent:T.border}`,
+              borderRadius:14,padding:"10px 12px",
+              display:"flex",alignItems:"center",gap:10,
+              textAlign:"left",transition:"all .15s",
+              borderLeft:`4px solid ${u.color}`,
+            }}>
+              <div style={{width:38,height:38,borderRadius:"50%",background:`linear-gradient(135deg,${u.color}cc,${u.color}44)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:700,color:"#fff",flexShrink:0}}>{u.avatar}</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2}}>
+                  <span style={{fontSize:13,fontWeight:600,color:T.text}}>{u.name}</span>
+                  {u.canAssignUp && <span style={{background:T.orange,borderRadius:99,padding:"0px 5px",fontSize:9,color:"#fff",fontWeight:700}}>↑ asigna arriba</span>}
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                  <span style={{fontSize:10,color:T.text3}}>{u.role} · {u.dept}</span>
+                  {boss && <span style={{fontSize:10,color:T.accent2,background:`${T.accent}15`,borderRadius:99,padding:"1px 6px"}}>Jefe: {boss.name.split(" ")[0]}</span>}
+                  {reports.length>0 && <span style={{fontSize:10,color:T.green,background:`${T.green}15`,borderRadius:99,padding:"1px 6px"}}>👥 {reports.length} reporte{reports.length>1?"s":""}</span>}
+                  {!u.reportsTo && <span style={{fontSize:10,color:T.gold||T.orange,background:`${T.orange}15`,borderRadius:99,padding:"1px 6px"}}>🔝 Raíz</span>}
+                </div>
+              </div>
+              <div style={{fontSize:16,color:T.text3,flexShrink:0}}>✏️</div>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Visual org chart */}
+      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:14,padding:"14px",overflowX:"auto"}}>
+        <div style={{fontSize:13,fontWeight:600,color:T.text,marginBottom:14}}>Vista del Organigrama</div>
+        <OrgChartView users={users} me={me} onChat={null} onProfile={null} readonly/>
+      </div>
+    </div>
+  );
+}
+
+function AdminAchievements({achievements, setAchievements, setModal, addToast, users, setUsers}) {
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:8}}>
+      <button onClick={()=>setModal({type:"newAchievement"})} style={{
+        width:"100%",padding:"11px",borderRadius:12,
+        border:`1px dashed ${T.accent}66`,background:`${T.accent}08`,
+        fontSize:13,color:T.accent2,fontWeight:500,display:"flex",alignItems:"center",justifyContent:"center",gap:8,marginBottom:4,
+      }}>
+        <span style={{fontSize:18}}>➕</span> Crear nuevo logro
+      </button>
+      {achievements.map(ach => (
+        <div key={ach.id} style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:14,padding:"12px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:12}}>
+            <div style={{width:48,height:48,borderRadius:14,background:`${T.accent}18`,border:`1px solid ${T.accent}33`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,flexShrink:0}}>{ach.icon}</div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:13,fontWeight:600,color:T.text}}>{ach.name}</div>
+              <div style={{fontSize:11,color:T.text3,marginTop:1}}>{ach.desc}</div>
+            </div>
+            <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>
+              <span style={{fontSize:12,color:T.accent2,fontFamily:"'DM Mono',monospace",fontWeight:600}}>+{ach.xpReward} XP</span>
+              <button onClick={()=>setModal({type:"editAchievement",data:ach})} style={{padding:"3px 8px",borderRadius:6,background:T.bg3,border:`1px solid ${T.border}`,fontSize:11,color:T.text2}}>Editar</button>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AdminXP({tasks, setTasks, addToast}) {
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:12}}>
+      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:16,padding:"16px",marginBottom:4}}>
+        <div style={{fontSize:14,fontWeight:600,color:T.text,marginBottom:4}}>⚡ Configuración de XP</div>
+        <div style={{fontSize:12,color:T.text3,marginBottom:12}}>Ajusta la XP que otorga cada tarea</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+          {[["Urgente",120,T.red],["Alta",80,T.orange],["Media",50,T.blue],["Baja",25,T.text3]].map(([label,val,color])=>(
+            <div key={label} style={{background:T.bg3,border:`1px solid ${T.border}`,borderRadius:10,padding:"10px 12px"}}>
+              <div style={{fontSize:11,color,fontWeight:600,marginBottom:6}}>{label}</div>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <input defaultValue={val} type="number" style={{
+                  flex:1,background:T.bg4,border:`1px solid ${T.border}`,borderRadius:8,padding:"5px 8px",fontSize:14,color:T.text,fontFamily:"'DM Mono',monospace",
+                  width:"100%",
+                }}/>
+                <span style={{fontSize:11,color:T.text3}}>XP</span>
+              </div>
+            </div>
+          ))}
+        </div>
+        <button onClick={()=>addToast("Configuración guardada","XP actualizada","⚡",T.accent)} style={{
+          width:"100%",marginTop:12,padding:"10px",borderRadius:10,
+          background:`linear-gradient(135deg,${T.accent},${T.accent3})`,
+          border:"none",fontSize:13,color:"#fff",fontWeight:600,
+        }}>Guardar configuración</button>
+      </div>
+
+      <div style={{fontSize:13,fontWeight:600,color:T.text,marginBottom:4}}>XP por tarea individual</div>
+      {tasks.map(t => {
+        const pc = PRIORITY_CFG[t.priority];
+        return (
+          <div key={t.id} style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"10px 12px",display:"flex",alignItems:"center",gap:10}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:13,fontWeight:500,color:T.text,marginBottom:2}}>{t.title}</div>
+              <Badge label={pc.label} color={pc.color} bg={pc.bg}/>
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <input
+                value={t.xpReward}
+                onChange={e=>setTasks(ts=>ts.map(x=>x.id!==t.id?x:{...x,xpReward:parseInt(e.target.value)||0}))}
+                type="number"
+                style={{width:60,background:T.bg3,border:`1px solid ${T.border}`,borderRadius:8,padding:"5px 8px",fontSize:13,color:T.accent2,fontFamily:"'DM Mono',monospace",textAlign:"center"}}
+              />
+              <span style={{fontSize:11,color:T.text3}}>XP</span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+
+function AdminLevels({levels, setLevels, addToast, users, onAnnualReset, askConfirm}) {
+  const [editing, setEditing] = useState(levels.map(l=>({...l})));
+
+  function update(idx, key, val) {
+    setEditing(eds => eds.map((e,i) => i!==idx ? e : {...e, [key]: val}));
+  }
+
+  function save() {
+    // Sort by xp and re-number
+    const sorted = [...editing].sort((a,b)=>a.xp-b.xp).map((l,i)=>({...l,l:i+1}));
+    setLevels(sorted);
+    addToast("Niveles guardados","Configuración de niveles actualizada","🎖️",T.accent);
+  }
+
+  function reset() {
+    setEditing(DEFAULT_LEVELS.map(l=>({...l})));
+    setLevels(DEFAULT_LEVELS);
+    addToast("Niveles restablecidos","Valores por defecto restaurados","↩️",T.text2);
+  }
+
+  const LEVEL_COLORS = ["#9ca3af","#60a5fa","#34d399","#a78bfa","#f59e0b","#f97316","#ec4899","#ef4444","#6c63ff","#ffd700"];
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:12}}>
+      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:16,padding:"14px",marginBottom:4}}>
+        <div style={{fontSize:14,fontWeight:600,color:T.text,marginBottom:4}}>🎖️ Configuración de Niveles</div>
+        <div style={{fontSize:12,color:T.text3,lineHeight:1.5}}>
+          Define el nombre y los XP requeridos para subir de nivel. Los cambios afectan a todos los usuarios en tiempo real.
+        </div>
+      </div>
+
+      {editing.map((lv, idx) => {
+        // find how many users are at this level
+        const usersAtLevel = users.filter(u => getLv(u.xp).l === lv.l).length;
+        return (
+          <div key={idx} style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:14,padding:"12px",borderLeft:`3px solid ${LEVEL_COLORS[idx]||T.accent}`}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+              <div style={{
+                width:36,height:36,borderRadius:10,flexShrink:0,
+                background:`${LEVEL_COLORS[idx]||T.accent}22`,
+                border:`1px solid ${LEVEL_COLORS[idx]||T.accent}44`,
+                display:"flex",alignItems:"center",justifyContent:"center",
+                fontSize:13,fontWeight:700,color:LEVEL_COLORS[idx]||T.accent,
+                fontFamily:"'DM Mono',monospace",
+              }}>LV{idx+1}</div>
+              <input
+                value={lv.t}
+                onChange={e=>update(idx,"t",e.target.value)}
+                style={{flex:1,background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:10,padding:"7px 12px",fontSize:14,fontWeight:600,color:T.text}}
+                placeholder="Nombre del nivel"
+              />
+              <input
+                value={lv.icon||"⭐"}
+                onChange={e=>update(idx,"icon",e.target.value)}
+                style={{width:44,background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:10,padding:"7px",fontSize:22,textAlign:"center",color:T.text}}
+                title="Emoji del nivel"
+              />
+              {usersAtLevel > 0 && (
+                <span style={{fontSize:11,color:T.text3,background:T.bg3,border:`1px solid ${T.border}`,borderRadius:99,padding:"2px 8px",flexShrink:0}}>
+                  👥 {usersAtLevel}
+                </span>
+              )}
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <span style={{fontSize:12,color:T.text3,flexShrink:0}}>XP requerido:</span>
+              <input
+                value={lv.xp}
+                onChange={e=>update(idx,"xp",parseInt(e.target.value)||0)}
+                type="number"
+                min={0}
+                disabled={idx===0}
+                style={{flex:1,background:idx===0?T.bg:T.bg3,border:`1px solid ${T.border2}`,borderRadius:10,padding:"7px 12px",fontSize:15,color:T.accent2,fontFamily:"'DM Mono',monospace",fontWeight:600,opacity:idx===0?0.5:1}}
+              />
+              <span style={{fontSize:12,color:T.text3,flexShrink:0}}>XP</span>
+            </div>
+            {idx === 0 && <div style={{fontSize:11,color:T.text3,marginTop:4}}>El nivel 1 siempre empieza en 0 XP</div>}
+          </div>
+        );
+      })}
+
+      <button onClick={save} style={{
+        width:"100%",padding:"13px",borderRadius:14,fontSize:14,fontWeight:600,
+        background:`linear-gradient(135deg,${T.accent},${T.accent3})`,
+        border:"none",color:"#fff",
+        boxShadow:`0 6px 20px ${T.accent}44`,
+      }}>💾 Guardar niveles</button>
+      <button onClick={reset} style={{
+        width:"100%",padding:"11px",borderRadius:12,fontSize:13,fontWeight:500,
+        background:"transparent",border:`1px solid ${T.border2}`,color:T.text3,
+      }}>↩️ Restablecer valores por defecto</button>
+
+      <div style={{background:"rgba(239,68,68,.06)",border:"1px solid rgba(239,68,68,.25)",borderRadius:14,padding:"14px",marginTop:4}}>
+        <div style={{fontSize:13,fontWeight:700,color:"#ef4444",marginBottom:6}}>🔄 Reset Anual de XP</div>
+        <div style={{fontSize:12,color:T.text3,lineHeight:1.6,marginBottom:12}}>
+          Archiva el nivel máximo del año en el historial de cada usuario y reinicia el XP a 0. Irreversible.
+        </div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12}}>
+          {users.slice(0,5).map(u=>{
+            const lv=getLv(u.xp);
+            return <div key={u.id} style={{background:T.bg3,border:`1px solid ${T.border}`,borderRadius:8,padding:"5px 8px",display:"flex",alignItems:"center",gap:5}}>
+              <span style={{fontSize:14}}>{lv.icon||"⭐"}</span>
+              <div><div style={{fontSize:10,fontWeight:600,color:T.text}}>{u.name.split(" ")[0]}</div><div style={{fontSize:9,color:T.text3}}>{lv.t}</div></div>
+            </div>;
+          })}
+        </div>
+        <button onClick={()=>{
+              const doReset = () => onAnnualReset();
+              if(askConfirm) askConfirm("Se archivará el nivel actual de todos los usuarios y su XP volverá a 0. Esta acción es irreversible.", doReset, true);
+              else if(window.confirm("¿Confirmas el reset anual?")) doReset();
+            }} style={{
+          width:"100%",padding:"11px",borderRadius:12,fontSize:13,fontWeight:600,
+          background:"rgba(239,68,68,.15)",border:"1px solid rgba(239,68,68,.4)",color:"#ef4444",
+        }}>🔄 Ejecutar Reset Anual {new Date().getFullYear()}</button>
+      </div>
+
+      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:14,padding:"14px",marginTop:4}}>
+        <div style={{fontSize:13,fontWeight:600,color:T.text,marginBottom:10}}>Vista previa del árbol de niveles</div>
+        <div style={{display:"flex",flexDirection:"column",gap:4}}>
+          {levels.map((lv,i) => (
+            <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"5px 0",borderBottom:`1px solid ${T.border}`}}>
+              <div style={{width:32,height:32,borderRadius:8,background:`${LEVEL_COLORS[i]||T.accent}22`,border:`1px solid ${LEVEL_COLORS[i]||T.accent}33`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>
+                {lv.icon||"⭐"}
+              </div>
+              <div style={{flex:1}}><span style={{fontSize:13,fontWeight:600,color:T.text}}>{lv.t}</span><span style={{fontSize:10,color:T.text3,marginLeft:6}}>LV{lv.l}</span></div>
+              <span style={{fontSize:12,color:T.text3,fontFamily:"'DM Mono',monospace"}}>{lv.xp} XP</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AdminStats({users, tasks}) {
+  const totalXP = users.reduce((a,u)=>a+u.xp,0);
+  const completed = tasks.filter(t=>t.status==="completed").length;
+  const pending = tasks.filter(t=>t.status!=="completed").length;
+  const sorted = [...users].sort((a,b)=>b.xp-a.xp);
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:12}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+        {[["Total XP empresa",totalXP,T.accent,"⚡"],["Tareas completadas",completed,T.green,"✅"],["Tareas pendientes",pending,T.orange,"○"],["Empleados activos",users.filter(u=>u.online).length,T.blue,"🟢"]].map(([l,v,c,i])=>(
+          <div key={l} style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:14,padding:"14px"}}>
+            <div style={{fontSize:22}}>{i}</div>
+            <div style={{fontSize:22,fontWeight:700,color:c,fontFamily:"'DM Mono',monospace"}}>{v}</div>
+            <div style={{fontSize:11,color:T.text3,marginTop:2}}>{l}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{fontSize:14,fontWeight:600,color:T.text}}>🏆 Ranking XP</div>
+      {sorted.map((u,i)=>(
+        <div key={u.id} style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:"10px 12px",display:"flex",alignItems:"center",gap:10}}>
+          <div style={{width:28,textAlign:"center",fontSize:16,fontWeight:700,color:i===0?T.orange:i===1?"#ccc":i===2?"#cd7f32":T.text3}}>
+            {i===0?"🥇":i===1?"🥈":i===2?"🥉":`#${i+1}`}
+          </div>
+          <Avatar user={u} size={36}/>
+          <div style={{flex:1}}>
+            <div style={{fontSize:13,fontWeight:600,color:T.text}}>{u.name}</div>
+            <XPBar xp={u.xp} compact/>
+          </div>
+          <div style={{fontSize:14,color:T.accent2,fontWeight:600,fontFamily:"'DM Mono',monospace"}}>{u.xp}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ══ MODAL LAYER ══ */
+function ModalLayer({modal, setModal, tasks, setTasks, users, setUsers, me, setMe, achievements, setAchievements, addToast, groups, setGroups, announcements, setAnnouncements}) {
+  const close = () => setModal(null);
+
+  const overlayStyle = {
+    position:"fixed",inset:0,background:"rgba(0,0,0,.7)",zIndex:1000,
+    display:"flex",flexDirection:"column",justifyContent:"flex-end",
+    animation:"fadeIn .15s ease-out",
+  };
+  const sheetStyle = {
+    background:T.surface,borderRadius:"24px 24px 0 0",
+    maxHeight:"85vh",display:"flex",flexDirection:"column",
+    animation:"slideUp .25s ease-out",
+  };
+
+  return (
+    <div style={overlayStyle} onClick={e=>{if(e.target===e.currentTarget)close();}}>
+      <div style={sheetStyle}>
+        {/* Handle */}
+        <div style={{display:"flex",justifyContent:"center",padding:"10px 0 4px"}}>
+          <div style={{width:40,height:4,borderRadius:99,background:T.border2}}/>
+        </div>
+
+        {/* CONTENT */}
+        <div className="scroll" style={{overflowY:"auto",padding:"0 20px 32px",flex:1}}>
+          {modal?.type === "newTask" && <NewTaskModal close={close} tasks={tasks} setTasks={setTasks} users={users} me={me} addToast={addToast}/>}
+          {modal?.type === "editTask" && <EditTaskModal close={close} task={modal.data} setTasks={setTasks} users={users} addToast={addToast}/>}
+          {modal?.type === "assignTask" && <AssignTaskModal close={close} tasks={tasks} setTasks={setTasks} users={users} me={me} addToast={addToast} preAssign={modal.data?.assignTo}/>}
+          {modal?.type === "newAchievement" && <NewAchievementModal close={close} setAchievements={setAchievements} addToast={addToast}/>}
+          {modal?.type === "editAchievement" && <EditAchievementModal close={close} ach={modal.data} setAchievements={setAchievements} addToast={addToast}/>}
+          {modal?.type === "grantAchievement" && <GrantAchievementModal close={close} achievements={achievements} users={users} setUsers={setUsers} addToast={addToast}/>}
+          {modal?.type === "newGroup" && <NewGroupModal close={close} users={users} setGroups={setGroups} addToast={addToast}/>}
+          {modal?.type === "newAnnouncement" && <NewAnnouncementModal close={close} setAnnouncements={setAnnouncements} me={me} addToast={addToast}/>}
+          {modal?.type === "profile" && <ProfileModal close={close} user={modal.data} me={me} setMe={setMe}/>}
+          {modal?.type === "userProfile" && <ProfileModal close={close} user={modal.data} me={me} setMe={setMe}/>}
+          {modal?.type === "editUser" && <EditUserModal close={close} user={modal.data} setUsers={setUsers} addToast={addToast}/>}
+          {modal?.type === "createUser" && <CreateUserModal close={close} setUsers={setUsers} addToast={addToast}/>}
+          {modal?.type === "notifications" && <NotificationsModal close={close} tasks={tasks} me={me}/>}
+          {modal?.type === "soundSettings" && <SoundSettingsModal close={close} soundEnabled={soundEnabled} setSoundEnabled={setSoundEnabled} soundVolume={soundVolume} setSoundVolume={setSoundVolume}/>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ModalHeader({title, icon}) {
+  return (
+    <div style={{marginBottom:20,paddingTop:4}}>
+      <div style={{fontSize:18,fontWeight:700,color:T.text,display:"flex",alignItems:"center",gap:10}}>
+        {icon && <span style={{fontSize:22}}>{icon}</span>} {title}
+      </div>
+    </div>
+  );
+}
+
+function FormField({label, children}) {
+  return (
+    <div style={{marginBottom:14}}>
+      <div style={{fontSize:11,fontWeight:600,color:T.text2,textTransform:"uppercase",letterSpacing:1,marginBottom:6}}>{label}</div>
+      {children}
+    </div>
+  );
+}
+
+function StyledInput({value, onChange, placeholder, type="text", ...rest}) {
+  return (
+    <input
+      value={value} onChange={onChange} placeholder={placeholder} type={type}
+      style={{width:"100%",background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 14px",fontSize:14,color:T.text}}
+      {...rest}
+    />
+  );
+}
+
+function StyledTextarea({value, onChange, placeholder, rows=3}) {
+  return (
+    <textarea
+      value={value} onChange={onChange} placeholder={placeholder} rows={rows}
+      style={{width:"100%",background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 14px",fontSize:14,color:T.text,lineHeight:1.4}}
+    />
+  );
+}
+
+function PrimaryBtn({onClick, children, color}) {
+  return (
+    <button onClick={onClick} style={{
+      width:"100%",padding:"13px",borderRadius:14,fontSize:15,fontWeight:600,
+      background: color ? `linear-gradient(135deg,${color},${color}cc)` : `linear-gradient(135deg,${T.accent},${T.accent3})`,
+      color:"#fff",marginTop:8,
+      boxShadow:`0 6px 20px ${color||T.accent}44`,
+    }}>{children}</button>
+  );
+}
+
+/* NEW TASK */
+function NewTaskModal({close, tasks, setTasks, users, me, addToast}) {
+  const [form, setForm] = useState({title:"",desc:"",assignedTo:"me",dueDate:"",priority:"medium",xpReward:50,tags:""});
+  const upd = (k,v) => setForm(f=>({...f,[k]:v}));
+
+  function save() {
+    if (!form.title.trim()) return;
+    const task = {
+      id:"t"+Date.now(), ...form,
+      assignedBy:"me", status:"pending",
+      tags: form.tags.split(",").map(s=>s.trim()).filter(Boolean),
+      dueDate: form.dueDate || new Date(Date.now()+86400000*3).toISOString().slice(0,16),
+    };
+    setTasks(ts=>[...ts,task]);
+    addToast("Tarea creada",form.title,"✅",T.green);
+    playSound("task_assigned");
+    close();
+  }
+
+  return (
+    <>
+      <ModalHeader title="Nueva Tarea" icon="➕"/>
+      <FormField label="Título"><StyledInput value={form.title} onChange={e=>upd("title",e.target.value)} placeholder="Descripción breve de la tarea"/></FormField>
+      <FormField label="Descripción"><StyledTextarea value={form.desc} onChange={e=>upd("desc",e.target.value)} placeholder="Detalles opcionales..."/></FormField>
+      <FormField label="Asignar a">
+        <select value={form.assignedTo} onChange={e=>upd("assignedTo",e.target.value)} style={{width:"100%",background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 14px",fontSize:14,color:T.text}}>
+          <option value="me">Yo mismo</option>
+          {getAssignableTargets(me.id, users).map(uid=>{
+            const u=users.find(x=>x.id===uid); return u?<option key={u.id} value={u.id}>{u.name} · {u.role} · {u.dept}</option>:null;
+          })}
+          {me.role==="Admin" && users.filter(u=>!getAssignableTargets(me.id,users).includes(u.id)&&u.id!==me.id).map(u=>
+            <option key={"a_"+u.id} value={u.id}>{u.name} · {u.role}</option>
+          )}
+        </select>
+      </FormField>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+        <FormField label="Prioridad">
+          <select value={form.priority} onChange={e=>upd("priority",e.target.value)} style={{width:"100%",background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 14px",fontSize:14,color:T.text}}>
+            <option value="urgent">🔴 Urgente</option>
+            <option value="high">🟠 Alta</option>
+            <option value="medium">🔵 Media</option>
+            <option value="low">⚪ Baja</option>
+          </select>
+        </FormField>
+        <FormField label="XP Recompensa">
+          <input value={form.xpReward} onChange={e=>upd("xpReward",parseInt(e.target.value)||0)} type="number" style={{width:"100%",background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 14px",fontSize:14,color:T.accent2,fontFamily:"'DM Mono',monospace"}}/>
+        </FormField>
+      </div>
+      <FormField label="Vencimiento"><StyledInput value={form.dueDate} onChange={e=>upd("dueDate",e.target.value)} type="datetime-local"/></FormField>
+      <FormField label="Tags (separados por coma)"><StyledInput value={form.tags} onChange={e=>upd("tags",e.target.value)} placeholder="dev, urgente, cliente"/></FormField>
+      <PrimaryBtn onClick={save}>Crear Tarea ✓</PrimaryBtn>
+    </>
+  );
+}
+
+/* EDIT TASK */
+function EditTaskModal({close, task, setTasks, users, addToast}) {
+  const [form, setForm] = useState({...task, tags:(task.tags||[]).join(", ")});
+  const upd = (k,v) => setForm(f=>({...f,[k]:v}));
+
+  function save() {
+    setTasks(ts=>ts.map(t=>t.id!==task.id?t:{...form,tags:form.tags.split(",").map(s=>s.trim()).filter(Boolean)}));
+    addToast("Tarea actualizada",form.title,"✏️",T.blue);
+    close();
+  }
+
+  return (
+    <>
+      <ModalHeader title="Editar Tarea" icon="✏️"/>
+      <FormField label="Título"><StyledInput value={form.title} onChange={e=>upd("title",e.target.value)}/></FormField>
+      <FormField label="Descripción"><StyledTextarea value={form.desc} onChange={e=>upd("desc",e.target.value)}/></FormField>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+        <FormField label="Estado">
+          <select value={form.status} onChange={e=>upd("status",e.target.value)} style={{width:"100%",background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 14px",fontSize:14,color:T.text}}>
+            {Object.entries(STATUS_CFG).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+          </select>
+        </FormField>
+        <FormField label="Prioridad">
+          <select value={form.priority} onChange={e=>upd("priority",e.target.value)} style={{width:"100%",background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 14px",fontSize:14,color:T.text}}>
+            <option value="urgent">🔴 Urgente</option>
+            <option value="high">🟠 Alta</option>
+            <option value="medium">🔵 Media</option>
+            <option value="low">⚪ Baja</option>
+          </select>
+        </FormField>
+      </div>
+      <FormField label="XP Recompensa">
+        <input value={form.xpReward} onChange={e=>upd("xpReward",parseInt(e.target.value)||0)} type="number" style={{width:"100%",background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 14px",fontSize:14,color:T.accent2,fontFamily:"'DM Mono',monospace"}}/>
+      </FormField>
+      <FormField label="Vencimiento"><StyledInput value={form.dueDate} onChange={e=>upd("dueDate",e.target.value)} type="datetime-local"/></FormField>
+      <PrimaryBtn onClick={save} color={T.blue}>Guardar cambios</PrimaryBtn>
+    </>
+  );
+}
+
+/* ASSIGN TASK */
+function AssignTaskModal({close, tasks, setTasks, users, me, addToast, preAssign}) {
+  const [form, setForm] = useState({title:"",desc:"",assignedTo:preAssign||USERS[0].id,dueDate:"",priority:"medium",xpReward:60,tags:""});
+  const upd = (k,v) => setForm(f=>({...f,[k]:v}));
+
+  function save() {
+    if (!form.title.trim()) return;
+    const task = {
+      id:"t"+Date.now(),...form,assignedBy:"me",status:"pending",
+      tags:form.tags.split(",").map(s=>s.trim()).filter(Boolean),
+      dueDate:form.dueDate||new Date(Date.now()+86400000*3).toISOString().slice(0,16),
+    };
+    setTasks(ts=>[...ts,task]);
+    const target = USERS.find(u=>u.id===form.assignedTo);
+    addToast("Tarea asignada",`A ${target?.name}: ${form.title}`,"📋",T.accent);
+    playSound("task_assigned");
+    close();
+  }
+
+  return (
+    <>
+      <ModalHeader title="Asignar Tarea" icon="📋"/>
+      <FormField label="Asignar a">
+        <select value={form.assignedTo} onChange={e=>upd("assignedTo",e.target.value)} style={{width:"100%",background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 14px",fontSize:14,color:T.text}}>
+          {getAssignableTargets(me.id, users).length > 0
+            ? getAssignableTargets(me.id, users).map(uid=>{
+                const u=users.find(x=>x.id===uid);
+                return u ? <option key={u.id} value={u.id}>{u.name} · {u.role} · {u.dept}</option> : null;
+              })
+            : users.map(u=><option key={u.id} value={u.id}>{u.name} · {u.dept}</option>)
+          }
+        </select>
+      </FormField>
+      <FormField label="Título"><StyledInput value={form.title} onChange={e=>upd("title",e.target.value)} placeholder="Descripción de la tarea"/></FormField>
+      <FormField label="Descripción"><StyledTextarea value={form.desc} onChange={e=>upd("desc",e.target.value)} placeholder="Detalles..."/></FormField>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+        <FormField label="Prioridad">
+          <select value={form.priority} onChange={e=>upd("priority",e.target.value)} style={{width:"100%",background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 14px",fontSize:14,color:T.text}}>
+            <option value="urgent">🔴 Urgente</option>
+            <option value="high">🟠 Alta</option>
+            <option value="medium">🔵 Media</option>
+            <option value="low">⚪ Baja</option>
+          </select>
+        </FormField>
+        <FormField label="XP">
+          <input value={form.xpReward} onChange={e=>upd("xpReward",parseInt(e.target.value)||0)} type="number" style={{width:"100%",background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 14px",fontSize:14,color:T.accent2,fontFamily:"'DM Mono',monospace"}}/>
+        </FormField>
+      </div>
+      <FormField label="Vencimiento"><StyledInput value={form.dueDate} onChange={e=>upd("dueDate",e.target.value)} type="datetime-local"/></FormField>
+      <PrimaryBtn onClick={save}>Asignar Tarea ✓</PrimaryBtn>
+    </>
+  );
+}
+
+/* NEW ACHIEVEMENT */
+function NewAchievementModal({close, setAchievements, addToast}) {
+  const [form, setForm] = useState({name:"",desc:"",icon:"🏆",xpReward:100,condition:""});
+  const upd = (k,v) => setForm(f=>({...f,[k]:v}));
+  const ICONS = ["🏆","⭐","🔥","💡","🚀","🤝","💎","🎯","❤️","👑","💪","🌟","🎖️","🥇","⚡"];
+
+  function save() {
+    if (!form.name.trim()) return;
+    setAchievements(a=>[...a,{id:"a"+Date.now(),...form}]);
+    addToast("Logro creado",form.name,"🏆",T.orange);
+    close();
+  }
+
+  return (
+    <>
+      <ModalHeader title="Nuevo Logro" icon="🏆"/>
+      <FormField label="Nombre"><StyledInput value={form.name} onChange={e=>upd("name",e.target.value)} placeholder="Ej: El Madrugador"/></FormField>
+      <FormField label="Descripción"><StyledTextarea value={form.desc} onChange={e=>upd("desc",e.target.value)} placeholder="¿Qué debe hacer el empleado para obtenerlo?" rows={2}/></FormField>
+      <FormField label="Icono">
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          {ICONS.map(ico => (
+            <button key={ico} onClick={()=>upd("icon",ico)} style={{
+              width:40,height:40,borderRadius:10,fontSize:22,
+              background:form.icon===ico?`${T.accent}22`:T.bg3,
+              border:`1px solid ${form.icon===ico?T.accent:T.border}`,
+            }}>{ico}</button>
+          ))}
+        </div>
+      </FormField>
+      <FormField label="XP que otorga">
+        <input value={form.xpReward} onChange={e=>upd("xpReward",parseInt(e.target.value)||0)} type="number" style={{width:"100%",background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 14px",fontSize:16,color:T.accent2,fontFamily:"'DM Mono',monospace"}}/>
+      </FormField>
+      <FormField label="Condición (referencia)"><StyledInput value={form.condition} onChange={e=>upd("condition",e.target.value)} placeholder="Ej: tasks_completed >= 20"/></FormField>
+      <PrimaryBtn onClick={save} color={T.orange}>Crear Logro 🏆</PrimaryBtn>
+    </>
+  );
+}
+
+/* EDIT ACHIEVEMENT */
+function EditAchievementModal({close, ach, setAchievements, addToast}) {
+  const [form, setForm] = useState({...ach});
+  const upd = (k,v) => setForm(f=>({...f,[k]:v}));
+
+  function save() {
+    setAchievements(as=>as.map(a=>a.id!==ach.id?a:form));
+    addToast("Logro actualizado",form.name,"✏️",T.blue);
+    close();
+  }
+
+  function remove() {
+    setAchievements(as=>as.filter(a=>a.id!==ach.id));
+    addToast("Logro eliminado",ach.name,"🗑️",T.red);
+    close();
+  }
+
+  return (
+    <>
+      <ModalHeader title="Editar Logro" icon="✏️"/>
+      <FormField label="Nombre"><StyledInput value={form.name} onChange={e=>upd("name",e.target.value)}/></FormField>
+      <FormField label="Descripción"><StyledTextarea value={form.desc} onChange={e=>upd("desc",e.target.value)} rows={2}/></FormField>
+      <FormField label="Icono actual">
+        <div style={{width:56,height:56,borderRadius:16,background:`${T.accent}18`,border:`1px solid ${T.accent}33`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:32}}>{form.icon}</div>
+      </FormField>
+      <FormField label="XP que otorga">
+        <input value={form.xpReward} onChange={e=>upd("xpReward",parseInt(e.target.value)||0)} type="number" style={{width:"100%",background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 14px",fontSize:16,color:T.accent2,fontFamily:"'DM Mono',monospace"}}/>
+      </FormField>
+      <PrimaryBtn onClick={save} color={T.blue}>Guardar cambios</PrimaryBtn>
+      <button onClick={remove} style={{width:"100%",marginTop:8,padding:"12px",borderRadius:12,background:`${T.red}18`,border:`1px solid ${T.red}44`,color:T.red,fontSize:14,fontWeight:600}}>🗑️ Eliminar logro</button>
+    </>
+  );
+}
+
+/* GRANT ACHIEVEMENT */
+function GrantAchievementModal({close, achievements, users, setUsers, addToast}) {
+  const [selUser, setSelUser] = useState(USERS[0].id);
+  const [selAch, setSelAch] = useState(achievements[0]?.id||"");
+
+  function grant() {
+    const u = users.find(x=>x.id===selUser)||USERS.find(x=>x.id===selUser);
+    const ach = achievements.find(x=>x.id===selAch);
+    if (!u || !ach) return;
+    setUsers(us=>us.map(x=>x.id!==selUser?x:{...x,xp:x.xp+ach.xpReward,badges:[...new Set([...x.badges,ach.icon])]}));
+    addToast(`🏅 Logro otorgado`,`${ach.name} → ${u.name} (+${ach.xpReward} XP)`,"🎉",T.orange);
+    playSound("achievement");
+    close();
+  }
+
+  return (
+    <>
+      <ModalHeader title="Otorgar Logro Manual" icon="🏅"/>
+      <FormField label="Empleado">
+        <select value={selUser} onChange={e=>setSelUser(e.target.value)} style={{width:"100%",background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 14px",fontSize:14,color:T.text}}>
+          {USERS.map(u=><option key={u.id} value={u.id}>{u.name} · {u.dept}</option>)}
+        </select>
+      </FormField>
+      <FormField label="Logro">
+        <select value={selAch} onChange={e=>setSelAch(e.target.value)} style={{width:"100%",background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 14px",fontSize:14,color:T.text}}>
+          {achievements.map(a=><option key={a.id} value={a.id}>{a.icon} {a.name} · +{a.xpReward} XP</option>)}
+        </select>
+      </FormField>
+      {selAch && (() => {
+        const ach = achievements.find(x=>x.id===selAch);
+        return ach ? (
+          <div style={{background:`${T.orange}12`,border:`1px solid ${T.orange}33`,borderRadius:12,padding:"12px",marginBottom:8}}>
+            <div style={{fontSize:28,marginBottom:6}}>{ach.icon}</div>
+            <div style={{fontSize:14,fontWeight:600,color:T.text}}>{ach.name}</div>
+            <div style={{fontSize:12,color:T.text3,marginTop:2}}>{ach.desc}</div>
+            <div style={{fontSize:13,color:T.accent2,fontFamily:"'DM Mono',monospace",marginTop:6,fontWeight:600}}>+{ach.xpReward} XP</div>
+          </div>
+        ) : null;
+      })()}
+      <PrimaryBtn onClick={grant} color={T.orange}>🏅 Otorgar Logro</PrimaryBtn>
+    </>
+  );
+}
+
+/* NEW GROUP */
+function NewGroupModal({close, users, setGroups, addToast}) {
+  const [form, setForm] = useState({name:"",desc:"",avatar:"👥",color:T.accent,members:[]});
+  const upd = (k,v) => setForm(f=>({...f,[k]:v}));
+  const EMOJIS = ["👥","💻","📣","🚀","🤝","📊","⚙️","🎯","💡","📱"];
+  const COLORS = [T.accent,"#22c55e","#f59e0b","#ec4899","#3b82f6","#14b8a6","#f97316"];
+
+  function save() {
+    if (!form.name.trim()) return;
+    setGroups(gs=>[...gs,{id:"g"+Date.now(),...form,members:["me",...form.members]}]);
+    addToast("Grupo creado",form.name,"👥",T.accent);
+    close();
+  }
+
+  return (
+    <>
+      <ModalHeader title="Nuevo Grupo" icon="👥"/>
+      <FormField label="Nombre"><StyledInput value={form.name} onChange={e=>upd("name",e.target.value)} placeholder="Ej: Proyecto Beta"/></FormField>
+      <FormField label="Descripción"><StyledInput value={form.desc} onChange={e=>upd("desc",e.target.value)} placeholder="Descripción breve"/></FormField>
+      <FormField label="Icono">
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          {EMOJIS.map(e=><button key={e} onClick={()=>upd("avatar",e)} style={{width:40,height:40,borderRadius:10,fontSize:22,background:form.avatar===e?`${T.accent}22`:T.bg3,border:`1px solid ${form.avatar===e?T.accent:T.border}`}}>{e}</button>)}
+        </div>
+      </FormField>
+      <FormField label="Color">
+        <div style={{display:"flex",gap:8}}>
+          {COLORS.map(c=><button key={c} onClick={()=>upd("color",c)} style={{width:32,height:32,borderRadius:"50%",background:c,border:`3px solid ${form.color===c?"#fff":"transparent"}`}}/>)}
+        </div>
+      </FormField>
+      <FormField label="Agregar miembros">
+        <div style={{display:"flex",flexDirection:"column",gap:6}}>
+          {USERS.map(u=>{
+            const isMember = form.members.includes(u.id);
+            return (
+              <button key={u.id} onClick={()=>upd("members",isMember?form.members.filter(x=>x!==u.id):[...form.members,u.id])} style={{
+                display:"flex",alignItems:"center",gap:10,padding:"8px 10px",borderRadius:12,
+                background:isMember?`${T.accent}18`:T.bg3,
+                border:`1px solid ${isMember?T.accent:T.border}`,
+                textAlign:"left",
+              }}>
+                <Avatar user={u} size={32}/>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:13,fontWeight:500,color:T.text}}>{u.name}</div>
+                  <div style={{fontSize:11,color:T.text3}}>{u.role}</div>
+                </div>
+                <span style={{fontSize:18,color:isMember?T.accent:T.text3}}>{isMember?"✓":"+"}</span>
+              </button>
+            );
+          })}
+        </div>
+      </FormField>
+      <PrimaryBtn onClick={save}>Crear Grupo</PrimaryBtn>
+    </>
+  );
+}
+
+/* NEW ANNOUNCEMENT */
+function NewAnnouncementModal({close, setAnnouncements, me, addToast}) {
+  const [form, setForm] = useState({title:"",text:"",pinned:false});
+  const upd = (k,v) => setForm(f=>({...f,[k]:v}));
+
+  function save() {
+    if (!form.title.trim() || !form.text.trim()) return;
+    setAnnouncements(as=>[{id:"ann"+Date.now(),from:"me",ts:Date.now(),reactions:{},pinned:false,...form},...as]);
+    addToast("Anuncio publicado",form.title,"📣",T.accent);
+    close();
+  }
+
+  return (
+    <>
+      <ModalHeader title="Nuevo Anuncio Global" icon="📣"/>
+      <FormField label="Título"><StyledInput value={form.title} onChange={e=>upd("title",e.target.value)} placeholder="Asunto del anuncio"/></FormField>
+      <FormField label="Mensaje"><StyledTextarea value={form.text} onChange={e=>upd("text",e.target.value)} placeholder="Escribe el contenido del anuncio..." rows={5}/></FormField>
+      <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:T.bg3,border:`1px solid ${T.border}`,borderRadius:12,marginBottom:8}}>
+        <button onClick={()=>upd("pinned",!form.pinned)} style={{
+          width:24,height:24,borderRadius:6,
+          background:form.pinned?T.accent:T.bg4,
+          border:`1px solid ${form.pinned?T.accent:T.border}`,
+          fontSize:12,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",
+        }}>{form.pinned?"✓":""}</button>
+        <span style={{fontSize:13,color:T.text2}}>Fijar anuncio en la parte superior</span>
+      </div>
+      <PrimaryBtn onClick={save}>Publicar Anuncio 📣</PrimaryBtn>
+    </>
+  );
+}
+
+/* PROFILE MODAL */
+function ProfileModal({close, user, me, setMe}) {
+  const isMe = user.id === "me" || user.id === me.id;
+  const u = isMe ? me : (USERS.find(x=>x.id===user.id)||user);
+  const lv = getLv(u.xp||0);
+  return (
+    <>
+      <div style={{textAlign:"center",marginBottom:20,paddingTop:8}}>
+        <div style={{
+          width:80,height:80,borderRadius:24,margin:"0 auto 12px",
+          background:`linear-gradient(135deg,${u.color}99,${u.color}44)`,
+          border:`2px solid ${u.color}66`,
+          display:"flex",alignItems:"center",justifyContent:"center",
+          fontSize:30,fontWeight:700,color:"#fff",
+          boxShadow:`0 12px 32px ${u.color}44`,
+        }}>{u.avatar}</div>
+        <div style={{fontSize:20,fontWeight:700,color:T.text}}>{u.name}</div>
+        <div style={{fontSize:13,color:T.text2,marginTop:4}}>{u.role} · {u.dept}</div>
+        <div style={{display:"flex",justifyContent:"center",gap:6,marginTop:8,flexWrap:"wrap"}}>
+          {(u.badges||[]).map((b,i)=><span key={i} style={{fontSize:22}}>{b}</span>)}
+        </div>
+      </div>
+      <div style={{background:T.surface2,borderRadius:16,padding:"16px",marginBottom:16}}>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+          <span style={{fontSize:13,fontWeight:600,color:T.text}}>LV{lv.l} — {lv.t}</span>
+          <span style={{fontSize:12,color:T.accent2,fontFamily:"'DM Mono',monospace"}}>{u.xp} XP</span>
+        </div>
+        <XPBar xp={u.xp||0}/>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:16}}>
+        {[["⚡",u.xp||0,"XP Total"],["🏆",(u.badges||[]).length,"Logros"],["🟢",u.online?"Online":"Offline","Estado"]].map(([i,v,l])=>(
+          <div key={l} style={{background:T.surface2,borderRadius:12,padding:"10px",textAlign:"center"}}>
+            <div style={{fontSize:18}}>{i}</div>
+            <div style={{fontSize:15,fontWeight:700,color:T.text,marginTop:2}}>{v}</div>
+            <div style={{fontSize:10,color:T.text3}}>{l}</div>
+          </div>
+        ))}
+      </div>
+      {/* Year History in profile modal */}
+      {(u.yearHistory||[]).length > 0 && (
+        <div style={{marginTop:16}}>
+          <div style={{fontSize:13,fontWeight:600,color:T.text,marginBottom:10}}>📅 Historial por Año</div>
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+            {[...(u.yearHistory||[])].sort((a,b)=>b.year-a.year).map((h,i)=>(
+              <div key={i} style={{background:T.bg3,border:`1px solid ${T.border}`,borderRadius:12,padding:"10px 12px",display:"flex",alignItems:"center",gap:10}}>
+                <div style={{width:40,height:40,borderRadius:12,background:`${T.accent}18`,border:`1px solid ${T.accent}33`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,flexShrink:0}}>{h.icon||"⭐"}</div>
+                <div style={{flex:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2}}>
+                    <span style={{fontSize:14,fontWeight:700,color:T.text}}>{h.year}</span>
+                    <span style={{background:`${T.accent}22`,borderRadius:99,padding:"1px 7px",fontSize:10,color:T.accent2,fontWeight:600}}>LV{h.maxLevel}</span>
+                  </div>
+                  <div style={{fontSize:12,fontWeight:600,color:T.text2}}>{h.icon||"⭐"} {h.maxLevelName}</div>
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontSize:13,color:T.accent2,fontFamily:"'DM Mono',monospace",fontWeight:600}}>{h.xp}</div>
+                  <div style={{fontSize:10,color:T.text3}}>XP</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+
+/* CREATE USER */
+function CreateUserModal({close, setUsers, addToast}) {
+  const [form, setForm] = useState({name:"",username:"",password:"",confirmPass:"",role:"Employee",dept:"",color:"#6c63ff"});
+  const [showPass, setShowPass] = useState(false);
+  const [error, setError] = useState("");
+  const upd = (k,v) => setForm(f=>({...f,[k]:v}));
+
+  const COLORS = ["#6c63ff","#22c55e","#f59e0b","#ec4899","#3b82f6","#14b8a6","#f97316","#ef4444","#a78bfa","#fb923c"];
+  const DEPTS = window.__BINET_AREAS__ || ["Tecnología","Marketing","Ventas","RRHH","Finanzas","Operaciones","Legal","Dirección"];
+
+  function save() {
+    setError("");
+    if (!form.name.trim()) { setError("El nombre es requerido"); return; }
+    if (!form.username.trim()) { setError("El usuario de acceso es requerido"); return; }
+    if (!form.password) { setError("La contraseña es requerida"); return; }
+    if (form.password !== form.confirmPass) { setError("Las contraseñas no coinciden"); return; }
+    if (form.password.length < 4) { setError("La contraseña debe tener al menos 4 caracteres"); return; }
+    // Check username not taken
+    const taken = AUTH_REGISTRY.some(a=>a.username.toLowerCase()===form.username.toLowerCase().trim());
+    if (taken) { setError("Ese nombre de usuario ya está en uso"); return; }
+
+    const initials = form.name.trim().split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2);
+    const newId = "u_"+Date.now();
+    const newUser = {
+      id: newId,
+      name: form.name.trim(),
+      username: form.username.trim().toLowerCase(),
+      role: form.role,
+      dept: form.dept||"General",
+      avatar: initials,
+      color: form.color,
+      online: false,
+      xp: 0,
+      level: 1,
+      badges: [],
+      yearHistory: [],
+    };
+    setUsers(us=>[...us, newUser]);
+    // Register credentials
+    AUTH_REGISTRY = [...AUTH_REGISTRY, {
+      id: "auth_"+newId,
+      username: form.username.trim().toLowerCase(),
+      password: form.password,
+      employeeId: newId,
+    }];
+    addToast("Usuario creado", `${newUser.name} · @${newUser.username}`, "✅", T.green);
+    close();
+  }
+
+  return (
+    <>
+      <ModalHeader title="Crear Nuevo Usuario" icon="➕"/>
+
+      <FormField label="Nombre completo del empleado">
+        <StyledInput value={form.name} onChange={e=>upd("name",e.target.value)} placeholder="Ej: María González"/>
+      </FormField>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+        <FormField label="Rol">
+          <select value={form.role} onChange={e=>upd("role",e.target.value)} style={{width:"100%",background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 14px",fontSize:14,color:T.text}}>
+            {["Admin","Manager","Employee","Viewer"].map(r=><option key={r}>{r}</option>)}
+          </select>
+        </FormField>
+        <FormField label="Área de Trabajo">
+          <select value={form.dept} onChange={e=>upd("dept",e.target.value)} style={{width:"100%",background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 14px",fontSize:14,color:T.text}}>
+            <option value="">Seleccionar...</option>
+            {DEPTS.map(d=><option key={d}>{d}</option>)}
+          </select>
+        </FormField>
+      </div>
+
+      <FormField label="Color de avatar">
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          {COLORS.map(c=>(
+            <button key={c} onClick={()=>upd("color",c)} style={{
+              width:32,height:32,borderRadius:"50%",background:c,border:`3px solid ${form.color===c?"#fff":c+"44"}`,
+              flexShrink:0,transition:"all .12s",
+              boxShadow:form.color===c?`0 0 0 3px ${T.bg},0 0 0 5px ${c}`:"none",
+            }}/>
+          ))}
+        </div>
+      </FormField>
+
+      {/* Preview avatar */}
+      {form.name && (
+        <div style={{display:"flex",alignItems:"center",gap:12,background:T.bg3,border:`1px solid ${T.border}`,borderRadius:12,padding:"10px 14px",marginBottom:6}}>
+          <div style={{width:40,height:40,borderRadius:"50%",background:`linear-gradient(135deg,${form.color}cc,${form.color}66)`,border:`2px solid ${form.color}44`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:700,color:"#fff"}}>
+            {form.name.split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2)}
+          </div>
+          <div>
+            <div style={{fontSize:13,fontWeight:600,color:T.text}}>{form.name}</div>
+            <div style={{fontSize:11,color:T.text3}}>{form.role}{form.dept?` · ${form.dept}`:""}</div>
+          </div>
+        </div>
+      )}
+
+      <div style={{background:T.bg3,border:`1px solid ${T.border}`,borderRadius:14,padding:"14px",marginBottom:6}}>
+        <div style={{fontSize:12,fontWeight:600,color:T.text2,marginBottom:12,textTransform:"uppercase",letterSpacing:1}}>🔐 Credenciales de acceso</div>
+        <FormField label="Nombre de usuario (para login)">
+          <div style={{position:"relative"}}>
+            <div style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",fontSize:14,color:T.text3,fontFamily:"'DM Mono'"}}>@</div>
+            <input value={form.username} onChange={e=>upd("username",e.target.value.replace(/\s/g,"").toLowerCase())} placeholder="usuario.apellido" style={{width:"100%",background:T.bg4,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 14px 11px 28px",fontSize:14,color:T.text,fontFamily:"'DM Mono',monospace"}}/>
+          </div>
+        </FormField>
+        <FormField label="Contraseña">
+          <div style={{position:"relative"}}>
+            <input value={form.password} onChange={e=>upd("password",e.target.value)} type={showPass?"text":"password"} placeholder="mínimo 4 caracteres" style={{width:"100%",background:T.bg4,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 40px 11px 14px",fontSize:14,color:T.text,letterSpacing:"1px"}}/>
+            <button onClick={()=>setShowPass(s=>!s)} style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",fontSize:14,color:T.text3,cursor:"pointer"}}>{showPass?"🙈":"👁️"}</button>
+          </div>
+        </FormField>
+        <FormField label="Confirmar contraseña">
+          <input value={form.confirmPass} onChange={e=>upd("confirmPass",e.target.value)} type={showPass?"text":"password"} placeholder="repite la contraseña" style={{width:"100%",background:T.bg4,border:`1px solid ${form.confirmPass&&form.confirmPass!==form.password?T.red:T.border2}`,borderRadius:12,padding:"11px 14px",fontSize:14,color:T.text,letterSpacing:"1px"}}/>
+          {form.confirmPass && form.confirmPass!==form.password && <div style={{fontSize:11,color:T.red,marginTop:4}}>Las contraseñas no coinciden</div>}
+        </FormField>
+      </div>
+
+      {error && (
+        <div style={{background:"rgba(239,68,68,.1)",border:"1px solid rgba(239,68,68,.3)",borderRadius:10,padding:"9px 12px",marginBottom:8,display:"flex",gap:8,alignItems:"center"}}>
+          <span>⚠️</span><span style={{fontSize:12,color:T.red}}>{error}</span>
+        </div>
+      )}
+
+      <PrimaryBtn onClick={save} color={T.green}>✅ Crear Usuario</PrimaryBtn>
+    </>
+  );
+}
+
+/* EDIT USER */
+function EditUserModal({close, user, setUsers, addToast}) {
+  const [form, setForm] = useState({...user});
+  const upd = (k,v) => setForm(f=>({...f,[k]:v}));
+  const authEntry = AUTH_REGISTRY.find(a=>a.employeeId===user.id);
+  const [newPass, setNewPass] = useState("");
+  const [showPass, setShowPass] = useState(false);
+
+  function save() {
+    setUsers(us=>us.map(u=>u.id!==user.id?u:{...form, username:form.username||authEntry?.username||""}));
+    // Update credentials in registry
+    if (authEntry) {
+      AUTH_REGISTRY = AUTH_REGISTRY.map(a=>a.employeeId!==user.id?a:{
+        ...a,
+        username: form.username||a.username,
+        password: newPass.trim()||a.password,
+      });
+    }
+    addToast("Usuario actualizado",form.name,"👤",T.blue);
+    close();
+  }
+
+  return (
+    <>
+      <ModalHeader title="Editar Usuario" icon="✏️"/>
+      <FormField label="Nombre completo"><StyledInput value={form.name} onChange={e=>upd("name",e.target.value)}/></FormField>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+        <FormField label="Rol">
+          <select value={form.role} onChange={e=>upd("role",e.target.value)} style={{width:"100%",background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 14px",fontSize:14,color:T.text}}>
+            {["Admin","Manager","Employee","Viewer"].map(r=><option key={r}>{r}</option>)}
+          </select>
+        </FormField>
+        <FormField label="Área de Trabajo">
+          <select value={form.dept||""} onChange={e=>upd("dept",e.target.value)}
+            style={{width:"100%",background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 14px",fontSize:14,color:T.text}}>
+            <option value="">— Sin área —</option>
+            {(window.__BINET_AREAS__||["Tecnología","Marketing","Ventas","RRHH","Finanzas","Operaciones","Legal","Dirección"]).map(d=>(
+              <option key={d} value={d}>{d}</option>
+            ))}
+          </select>
+        </FormField>
+      </div>
+      <div style={{background:T.bg3,border:`1px solid ${T.border}`,borderRadius:14,padding:"14px",marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:600,color:T.text2,marginBottom:10,textTransform:"uppercase",letterSpacing:1}}>🔐 Credenciales de acceso</div>
+        <FormField label="Usuario (login)">
+          <div style={{position:"relative"}}>
+            <div style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",fontSize:14,color:T.text3}}>@</div>
+            <input value={form.username||authEntry?.username||""} onChange={e=>upd("username",e.target.value)} style={{width:"100%",background:T.bg4,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 14px 11px 28px",fontSize:14,color:T.text,fontFamily:"'DM Mono',monospace"}}/>
+          </div>
+        </FormField>
+        <FormField label="Nueva contraseña (dejar vacío para no cambiar)">
+          <div style={{position:"relative"}}>
+            <input value={newPass} onChange={e=>setNewPass(e.target.value)} type={showPass?"text":"password"} placeholder="••••••••" style={{width:"100%",background:T.bg4,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 40px 11px 14px",fontSize:14,color:T.text,letterSpacing:"1px"}}/>
+            <button onClick={()=>setShowPass(s=>!s)} style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",fontSize:14,color:T.text3,cursor:"pointer"}}>{showPass?"🙈":"👁️"}</button>
+          </div>
+        </FormField>
+      </div>
+      <FormField label="XP actual">
+        <input value={form.xp} onChange={e=>upd("xp",parseInt(e.target.value)||0)} type="number" style={{width:"100%",background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 14px",fontSize:16,color:T.accent2,fontFamily:"'DM Mono',monospace"}}/>
+      </FormField>
+      <PrimaryBtn onClick={save} color={T.blue}>💾 Guardar cambios</PrimaryBtn>
+    </>
+  );
+}
+
+
+/* SOUND SETTINGS */
+function SoundSettingsModal({close, soundEnabled, setSoundEnabled, soundVolume, setSoundVolume}) {
+  const SOUNDS = [
+    {type:"message_send",   label:"Mensaje enviado",         icon:"📤"},
+    {type:"message_receive",label:"Mensaje recibido",        icon:"📩"},
+    {type:"notification",   label:"Notificación del sistema",icon:"🔔"},
+    {type:"task_complete",  label:"Tarea completada",        icon:"✅"},
+    {type:"achievement",    label:"Logro desbloqueado",      icon:"🏆"},
+    {type:"task_assigned",  label:"Tarea asignada",          icon:"📋"},
+    {type:"login",          label:"Inicio de sesión",        icon:"👋"},
+    {type:"level_up",       label:"Subida de nivel",         icon:"🎖️"},
+  ];
+
+  return (
+    <>
+      <ModalHeader title="Sonidos de Notificación" icon="🔔"/>
+
+      {/* Master toggle */}
+      <div style={{
+        display:"flex",alignItems:"center",justifyContent:"space-between",
+        background:T.surface2,border:`1px solid ${T.border}`,borderRadius:16,
+        padding:"16px",marginBottom:16,
+      }}>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <span style={{fontSize:28}}>{soundEnabled ? "🔔" : "🔕"}</span>
+          <div>
+            <div style={{fontSize:14,fontWeight:700,color:T.text}}>Sonidos</div>
+            <div style={{fontSize:11,color:T.text3}}>{soundEnabled ? "Activados" : "Desactivados"}</div>
+          </div>
+        </div>
+        <button onClick={()=>{ setSoundEnabled(s=>!s); playSound(soundEnabled?"error":"notification"); }} style={{
+          width:52,height:28,borderRadius:99,
+          background: soundEnabled ? T.accent : T.bg4,
+          border:`1px solid ${soundEnabled?T.accent:T.border2}`,
+          position:"relative",transition:"all .25s",flexShrink:0,cursor:"pointer",
+        }}>
+          <div style={{
+            position:"absolute",top:3,
+            left: soundEnabled ? 26 : 4,
+            width:20,height:20,borderRadius:"50%",
+            background:"#fff",
+            transition:"left .25s",
+            boxShadow:"0 2px 6px rgba(0,0,0,.4)",
+          }}/>
+        </button>
+      </div>
+
+      {/* Volume slider */}
+      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:14,padding:"14px",marginBottom:16,opacity:soundEnabled?1:0.4}}>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
+          <span style={{fontSize:13,fontWeight:600,color:T.text}}>🔉 Volumen</span>
+          <span style={{fontSize:13,color:T.accent2,fontFamily:"'DM Mono',monospace",fontWeight:600}}>{Math.round(soundVolume*100)}%</span>
+        </div>
+        <input
+          type="range" min="0" max="100"
+          value={Math.round(soundVolume*100)}
+          disabled={!soundEnabled}
+          onChange={e=>{ const v=parseInt(e.target.value)/100; setSoundVolume(v); window.__BINET_SOUND__.volume=v; }}
+          onMouseUp={()=>playSound("notification")}
+          onTouchEnd={()=>playSound("notification")}
+          style={{width:"100%",accentColor:T.accent,cursor:soundEnabled?"pointer":"not-allowed"}}
+        />
+        <div style={{display:"flex",justifyContent:"space-between",marginTop:4}}>
+          <span style={{fontSize:10,color:T.text3}}>0%</span>
+          <span style={{fontSize:10,color:T.text3}}>50%</span>
+          <span style={{fontSize:10,color:T.text3}}>100%</span>
+        </div>
+      </div>
+
+      {/* Sound preview list */}
+      <div style={{marginBottom:8}}>
+        <div style={{fontSize:12,fontWeight:600,color:T.text2,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Vista previa de sonidos</div>
+        <div style={{display:"flex",flexDirection:"column",gap:6,opacity:soundEnabled?1:0.4}}>
+          {SOUNDS.map(s=>(
+            <div key={s.type} style={{
+              display:"flex",alignItems:"center",gap:12,
+              background:T.surface,border:`1px solid ${T.border}`,
+              borderRadius:12,padding:"10px 14px",
+            }}>
+              <span style={{fontSize:20,flexShrink:0}}>{s.icon}</span>
+              <span style={{flex:1,fontSize:13,color:T.text}}>{s.label}</span>
+              <button
+                disabled={!soundEnabled}
+                onClick={()=>playSound(s.type)}
+                style={{
+                  padding:"5px 12px",borderRadius:9,fontSize:12,fontWeight:500,
+                  background:soundEnabled?`${T.accent}22`:"transparent",
+                  border:`1px solid ${soundEnabled?T.accent+"44":T.border}`,
+                  color:soundEnabled?T.accent2:T.text3,
+                  cursor:soundEnabled?"pointer":"not-allowed",
+                  flexShrink:0,
+                }}
+              >▶ Probar</button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+
+/* NOTIFICATIONS */
+function NotificationsModal({close, tasks, me}) {
+  const overdues = tasks.filter(t=>t.assignedTo==="me"&&t.status!=="completed"&&new Date(t.dueDate)<new Date());
+  const pending = tasks.filter(t=>t.assignedTo==="me"&&t.status==="pending");
+  const notifs = [
+    ...overdues.map(t=>({id:t.id,icon:"⚠️",title:"Tarea vencida",desc:t.title,color:T.red,ts:t.dueDate})),
+    ...pending.slice(0,3).map(t=>({id:"p"+t.id,icon:"📋",title:"Tarea pendiente",desc:t.title,color:T.orange,ts:t.dueDate})),
+    {id:"sys1",icon:"👋",title:"¡Bienvenido a BINET!",desc:"Tu plataforma de comunicación interna",color:T.accent,ts:new Date().toISOString()},
+  ];
+
+  return (
+    <>
+      <ModalHeader title="Notificaciones" icon="🔔"/>
+      {notifs.map(n=>(
+        <div key={n.id} style={{display:"flex",gap:12,padding:"12px 0",borderBottom:`1px solid ${T.border}`}}>
+          <div style={{width:40,height:40,borderRadius:12,background:`${n.color}18`,border:`1px solid ${n.color}33`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>{n.icon}</div>
+          <div>
+            <div style={{fontSize:13,fontWeight:600,color:T.text}}>{n.title}</div>
+            <div style={{fontSize:12,color:T.text2,marginTop:2}}>{n.desc}</div>
+          </div>
+        </div>
+      ))}
+    </>
+  );
+}
+
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<NexusApp />);
+
+  </script>
+</body>
+</html>
