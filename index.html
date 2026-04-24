@@ -1,1025 +1,120 @@
 <!doctype html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="theme-color" content="#0c0c0f" />
-  <title>BINET Live Chat | Firebase</title>
-
-  <script type="module">
-    /************************************************************
-     * BINET LIVE CHAT - HTML + FIREBASE REALTIME DATABASE
-     * Usuarios de prueba:
-     *  - rich / 1234 / administrador
-     *  - ariana / 1234 / usuario
-     *
-     * IMPORTANTE:
-     * 1) Reemplaza firebaseConfig con los datos de tu proyecto.
-     * 2) Pega las reglas Firebase incluidas al final de esta respuesta.
-     * 3) Usa Firebase Realtime Database, no Firestore.
-     ************************************************************/
-
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
-    import {
-      getDatabase, ref, set, get, push, update, remove,
-      onValue, onChildAdded, serverTimestamp, onDisconnect
-    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
-
-    const firebaseConfig = {
-      apiKey: "PEGA_AQUI_TU_API_KEY",
-      authDomain: "PEGA_AQUI_TU_AUTH_DOMAIN",
-      databaseURL: "PEGA_AQUI_TU_DATABASE_URL",
-      projectId: "PEGA_AQUI_TU_PROJECT_ID",
-      storageBucket: "PEGA_AQUI_TU_STORAGE_BUCKET",
-      messagingSenderId: "PEGA_AQUI_TU_MESSAGING_SENDER_ID",
-      appId: "PEGA_AQUI_TU_APP_ID"
-    };
-
-    const app = initializeApp(firebaseConfig);
-    const db = getDatabase(app);
-
-    const $ = (id) => document.getElementById(id);
-    const state = {
-      me: null,
-      users: {},
-      activeChatId: "general",
-      activeChatType: "group",
-      activeChatName: "General",
-      messagesUnsub: null,
-      typingTimer: null,
-      lastRenderedIds: new Set()
-    };
-
-    const demoUsers = {
-      rich: {
-        id: "rich",
-        username: "rich",
-        password: "1234",
-        name: "Richard Urbina",
-        role: "administrador",
-        avatar: "RU",
-        color: "#6c63ff",
-        online: false,
-        createdAt: Date.now()
-      },
-      ariana: {
-        id: "ariana",
-        username: "ariana",
-        password: "1234",
-        name: "Ariana",
-        role: "usuario",
-        avatar: "AR",
-        color: "#22c55e",
-        online: false,
-        createdAt: Date.now()
-      }
-    };
-
-    const defaultRooms = {
-      general: {
-        id: "general",
-        type: "group",
-        name: "General",
-        icon: "💬",
-        description: "Chat general de la empresa",
-        createdAt: Date.now()
-      },
-      administracion: {
-        id: "administracion",
-        type: "group",
-        name: "Administración",
-        icon: "👑",
-        description: "Canal administrativo",
-        createdAt: Date.now()
-      }
-    };
-
-    async function seedFirebase() {
-      const usersSnap = await get(ref(db, "users"));
-      if (!usersSnap.exists()) {
-        await set(ref(db, "users"), demoUsers);
-      } else {
-        const existing = usersSnap.val() || {};
-        const patch = {};
-        if (!existing.rich) patch["users/rich"] = demoUsers.rich;
-        if (!existing.ariana) patch["users/ariana"] = demoUsers.ariana;
-        if (Object.keys(patch).length) await update(ref(db), patch);
-      }
-
-      const roomsSnap = await get(ref(db, "rooms"));
-      if (!roomsSnap.exists()) {
-        await set(ref(db, "rooms"), defaultRooms);
-      } else {
-        const existingRooms = roomsSnap.val() || {};
-        const patch = {};
-        if (!existingRooms.general) patch["rooms/general"] = defaultRooms.general;
-        if (!existingRooms.administracion) patch["rooms/administracion"] = defaultRooms.administracion;
-        if (Object.keys(patch).length) await update(ref(db), patch);
-      }
-
-      const welcomeSnap = await get(ref(db, "messages/general"));
-      if (!welcomeSnap.exists()) {
-        const msgRef = push(ref(db, "messages/general"));
-        await set(msgRef, {
-          id: msgRef.key,
-          chatId: "general",
-          from: "system",
-          fromName: "BINET Sistema",
-          fromAvatar: "B",
-          fromColor: "#6c63ff",
-          text: "Bienvenido a BINET Live Chat. Inicia sesión como rich/1234 o ariana/1234 para probar el chat en vivo.",
-          type: "system",
-          createdAt: Date.now()
-        });
-      }
-    }
-
-    function escapeHtml(str = "") {
-      return String(str)
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#039;");
-    }
-
-    function timeLabel(ts) {
-      if (!ts) return "";
-      const d = new Date(ts);
-      return d.toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" });
-    }
-
-    function dateLabel(ts) {
-      if (!ts) return "";
-      const d = new Date(ts);
-      return d.toLocaleDateString("es-CL", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric"
-      });
-    }
-
-    function showToast(text, type = "ok") {
-      const box = $("toast");
-      box.textContent = text;
-      box.className = "toast show " + type;
-      setTimeout(() => box.className = "toast", 2600);
-    }
-
-    function setLoginLoading(isLoading) {
-      $("loginBtn").disabled = isLoading;
-      $("loginBtn").textContent = isLoading ? "Ingresando..." : "Ingresar";
-    }
-
-    async function login() {
-      const username = $("username").value.trim().toLowerCase();
-      const password = $("password").value.trim();
-
-      $("loginError").textContent = "";
-      if (!username || !password) {
-        $("loginError").textContent = "Ingresa usuario y contraseña.";
-        return;
-      }
-
-      setLoginLoading(true);
-      try {
-        const snap = await get(ref(db, "users/" + username));
-        if (!snap.exists()) {
-          $("loginError").textContent = "Usuario no existe.";
-          return;
-        }
-
-        const user = snap.val();
-        if (user.password !== password) {
-          $("loginError").textContent = "Contraseña incorrecta.";
-          return;
-        }
-
-        state.me = user;
-        localStorage.setItem("binet_user", username);
-
-        await update(ref(db, "users/" + username), {
-          online: true,
-          lastSeen: Date.now()
-        });
-
-        onDisconnect(ref(db, "users/" + username + "/online")).set(false);
-        onDisconnect(ref(db, "users/" + username + "/lastSeen")).set(Date.now());
-
-        $("loginScreen").classList.add("hidden");
-        $("appScreen").classList.remove("hidden");
-
-        $("meName").textContent = user.name;
-        $("meRole").textContent = user.role;
-        $("meAvatar").textContent = user.avatar;
-        $("meAvatar").style.background = user.color;
-
-        listenUsers();
-        listenRooms();
-        openChat("group", "general", "General");
-        showToast("Bienvenido " + user.name, "ok");
-      } catch (err) {
-        console.error(err);
-        $("loginError").textContent = "Error conectando con Firebase. Revisa tu configuración.";
-      } finally {
-        setLoginLoading(false);
-      }
-    }
-
-    async function logout() {
-      if (state.me) {
-        await update(ref(db, "users/" + state.me.id), {
-          online: false,
-          lastSeen: Date.now()
-        });
-      }
-      localStorage.removeItem("binet_user");
-      state.me = null;
-      $("appScreen").classList.add("hidden");
-      $("loginScreen").classList.remove("hidden");
-      $("messages").innerHTML = "";
-      $("chatList").innerHTML = "";
-      $("usersList").innerHTML = "";
-    }
-
-    function listenUsers() {
-      onValue(ref(db, "users"), (snap) => {
-        state.users = snap.val() || {};
-        renderUsers();
-        renderSidebarUsers();
-      });
-    }
-
-    function listenRooms() {
-      onValue(ref(db, "rooms"), (snap) => {
-        const rooms = snap.val() || {};
-        renderRooms(rooms);
-      });
-    }
-
-    function renderRooms(rooms) {
-      const wrap = $("roomsList");
-      wrap.innerHTML = "";
-      Object.values(rooms).forEach(room => {
-        const item = document.createElement("button");
-        item.className = "chat-item " + (state.activeChatId === room.id ? "active" : "");
-        item.onclick = () => openChat("group", room.id, room.name);
-        item.innerHTML = `
-          <div class="room-avatar">${room.icon || "💬"}</div>
-          <div class="chat-meta">
-            <div class="chat-title">${escapeHtml(room.name)}</div>
-            <div class="chat-sub">${escapeHtml(room.description || "Canal de conversación")}</div>
-          </div>
-        `;
-        wrap.appendChild(item);
-      });
-    }
-
-    function renderSidebarUsers() {
-      const wrap = $("chatList");
-      wrap.innerHTML = "";
-      Object.values(state.users)
-        .filter(u => u.id !== state.me?.id)
-        .forEach(u => {
-          const dmId = getDmId(state.me.id, u.id);
-          const item = document.createElement("button");
-          item.className = "chat-item " + (state.activeChatId === dmId ? "active" : "");
-          item.onclick = () => openChat("dm", dmId, u.name);
-          item.innerHTML = `
-            <div class="avatar small" style="background:${u.color}">${escapeHtml(u.avatar)}</div>
-            <div class="chat-meta">
-              <div class="chat-title">${escapeHtml(u.name)}</div>
-              <div class="chat-sub"><span class="dot ${u.online ? "on" : ""}"></span>${u.online ? "En línea" : "Desconectado"} · ${escapeHtml(u.role)}</div>
-            </div>
-          `;
-          wrap.appendChild(item);
-        });
-    }
-
-    function renderUsers() {
-      const wrap = $("usersList");
-      wrap.innerHTML = "";
-
-      Object.values(state.users).forEach(u => {
-        const card = document.createElement("div");
-        card.className = "user-card";
-        card.innerHTML = `
-          <div class="avatar" style="background:${u.color}">${escapeHtml(u.avatar)}</div>
-          <div class="user-info">
-            <div class="user-name">${escapeHtml(u.name)}</div>
-            <div class="user-role">${escapeHtml(u.role)} · @${escapeHtml(u.username)}</div>
-          </div>
-          <div class="status-pill ${u.online ? "online" : ""}">
-            ${u.online ? "online" : "offline"}
-          </div>
-        `;
-        wrap.appendChild(card);
-      });
-    }
-
-    function getDmId(a, b) {
-      return ["dm", ...[a, b].sort()].join("_");
-    }
-
-    function openChat(type, id, name) {
-      state.activeChatType = type;
-      state.activeChatId = id;
-      state.activeChatName = name;
-      state.lastRenderedIds = new Set();
-
-      $("chatTitle").textContent = name;
-      $("chatSubtitle").textContent = type === "group" ? "Canal grupal en vivo" : "Mensaje directo";
-      $("messages").innerHTML = "";
-      $("messageInput").focus();
-
-      if (state.messagesUnsub) state.messagesUnsub();
-
-      const messagesRef = ref(db, "messages/" + id);
-      const callback = onChildAdded(messagesRef, (snap) => {
-        const msg = snap.val();
-        if (!msg || state.lastRenderedIds.has(msg.id)) return;
-        state.lastRenderedIds.add(msg.id);
-        renderMessage(msg);
-      });
-
-      state.messagesUnsub = callback;
-
-      listenTyping(id);
-      listenRooms();
-      renderSidebarUsers();
-    }
-
-    function renderMessage(msg) {
-      const wrap = $("messages");
-      const mine = msg.from === state.me?.id;
-      const isSystem = msg.type === "system";
-
-      const div = document.createElement("div");
-      div.className = isSystem ? "message-row system" : "message-row " + (mine ? "mine" : "other");
-
-      div.innerHTML = isSystem ? `
-        <div class="system-msg">${escapeHtml(msg.text)}</div>
-      ` : `
-        <div class="msg-avatar" style="background:${msg.fromColor || "#6c63ff"}">${escapeHtml(msg.fromAvatar || "?")}</div>
-        <div class="bubble">
-          <div class="bubble-head">
-            <strong>${escapeHtml(msg.fromName || msg.from)}</strong>
-            <span>${timeLabel(msg.createdAt)}</span>
-          </div>
-          <div class="bubble-text">${linkify(escapeHtml(msg.text))}</div>
-        </div>
-      `;
-
-      wrap.appendChild(div);
-      wrap.scrollTop = wrap.scrollHeight;
-    }
-
-    function linkify(text) {
-      return text.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
-    }
-
-    async function sendMessage() {
-      const input = $("messageInput");
-      const text = input.value.trim();
-      if (!text || !state.me || !state.activeChatId) return;
-
-      const msgRef = push(ref(db, "messages/" + state.activeChatId));
-      const msg = {
-        id: msgRef.key,
-        chatId: state.activeChatId,
-        chatType: state.activeChatType,
-        from: state.me.id,
-        fromName: state.me.name,
-        fromAvatar: state.me.avatar,
-        fromColor: state.me.color,
-        text,
-        type: "text",
-        createdAt: Date.now()
-      };
-
-      await set(msgRef, msg);
-      await update(ref(db, "chatMeta/" + state.activeChatId), {
-        lastText: text,
-        lastFrom: state.me.name,
-        updatedAt: Date.now()
-      });
-
-      input.value = "";
-      autoResize(input);
-      clearTyping();
-    }
-
-    async function setTyping(isTyping) {
-      if (!state.me || !state.activeChatId) return;
-      const typingRef = ref(db, `typing/${state.activeChatId}/${state.me.id}`);
-      if (isTyping) {
-        await set(typingRef, {
-          name: state.me.name,
-          at: Date.now()
-        });
-      } else {
-        await remove(typingRef);
-      }
-    }
-
-    function clearTyping() {
-      clearTimeout(state.typingTimer);
-      setTyping(false);
-    }
-
-    function listenTyping(chatId) {
-      onValue(ref(db, "typing/" + chatId), (snap) => {
-        const data = snap.val() || {};
-        const names = Object.entries(data)
-          .filter(([id]) => id !== state.me?.id)
-          .map(([, v]) => v.name);
-
-        const box = $("typingBox");
-        if (names.length) {
-          box.textContent = names.join(", ") + " está escribiendo...";
-          box.classList.add("show");
-        } else {
-          box.textContent = "";
-          box.classList.remove("show");
-        }
-      });
-    }
-
-    function autoResize(el) {
-      el.style.height = "auto";
-      el.style.height = Math.min(el.scrollHeight, 120) + "px";
-    }
-
-    async function createUser() {
-      if (!state.me || state.me.role !== "administrador") {
-        showToast("Solo el administrador puede crear usuarios.", "bad");
-        return;
-      }
-
-      const name = prompt("Nombre completo del usuario:");
-      if (!name) return;
-
-      const username = prompt("Usuario de acceso, sin espacios:")?.trim().toLowerCase();
-      if (!username) return;
-
-      const password = prompt("Contraseña:");
-      if (!password) return;
-
-      const role = prompt("Rol: administrador o usuario", "usuario")?.trim().toLowerCase() || "usuario";
-      const avatar = name.split(" ").map(x => x[0]).join("").slice(0,2).toUpperCase();
-      const colors = ["#6c63ff", "#22c55e", "#f59e0b", "#ec4899", "#3b82f6", "#14b8a6"];
-      const color = colors[Math.floor(Math.random() * colors.length)];
-
-      const existing = await get(ref(db, "users/" + username));
-      if (existing.exists()) {
-        showToast("Ese usuario ya existe.", "bad");
-        return;
-      }
-
-      await set(ref(db, "users/" + username), {
-        id: username,
-        username,
-        password,
-        name,
-        role: role === "administrador" ? "administrador" : "usuario",
-        avatar,
-        color,
-        online: false,
-        createdAt: Date.now()
-      });
-
-      showToast("Usuario creado correctamente.", "ok");
-    }
-
-    async function createRoom() {
-      if (!state.me || state.me.role !== "administrador") {
-        showToast("Solo el administrador puede crear canales.", "bad");
-        return;
-      }
-
-      const name = prompt("Nombre del canal:");
-      if (!name) return;
-
-      const id = name.toLowerCase()
-        .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-        .replace(/[^a-z0-9]+/g, "_")
-        .replace(/^_|_$/g, "");
-
-      await set(ref(db, "rooms/" + id), {
-        id,
-        type: "group",
-        name,
-        icon: "💬",
-        description: "Canal creado por " + state.me.name,
-        createdAt: Date.now()
-      });
-
-      showToast("Canal creado.", "ok");
-    }
-
-    function setupEvents() {
-      $("loginBtn").addEventListener("click", login);
-      $("logoutBtn").addEventListener("click", logout);
-      $("sendBtn").addEventListener("click", sendMessage);
-      $("newUserBtn").addEventListener("click", createUser);
-      $("newRoomBtn").addEventListener("click", createRoom);
-
-      $("password").addEventListener("keydown", (e) => {
-        if (e.key === "Enter") login();
-      });
-
-      $("username").addEventListener("keydown", (e) => {
-        if (e.key === "Enter") $("password").focus();
-      });
-
-      $("messageInput").addEventListener("input", (e) => {
-        autoResize(e.target);
-        setTyping(true);
-        clearTimeout(state.typingTimer);
-        state.typingTimer = setTimeout(() => setTyping(false), 1400);
-      });
-
-      $("messageInput").addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && !e.shiftKey) {
-          e.preventDefault();
-          sendMessage();
-        }
-      });
-
-      window.addEventListener("beforeunload", () => {
-        if (state.me) {
-          update(ref(db, "users/" + state.me.id), {
-            online: false,
-            lastSeen: Date.now()
-          });
-        }
-      });
-    }
-
-    async function boot() {
-      setupEvents();
-      try {
-        await seedFirebase();
-        const saved = localStorage.getItem("binet_user");
-        if (saved) $("username").value = saved;
-      } catch (err) {
-        console.error(err);
-        $("loginError").textContent = "Configura Firebase antes de usar la app.";
-      }
-    }
-
-    window.addEventListener("DOMContentLoaded", boot);
-  </script>
-
-  <style>
-    *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
-    :root{
-      --bg:#0c0c0f;
-      --bg2:#131318;
-      --panel:#1a1a22;
-      --panel2:#22222e;
-      --line:#2d2d3d;
-      --text:#f1f1f8;
-      --muted:#a8a8c0;
-      --muted2:#66667e;
-      --accent:#6c63ff;
-      --accent2:#8b84ff;
-      --green:#22c55e;
-      --red:#ef4444;
-      --orange:#f59e0b;
-      --radius:18px;
-    }
-
-    html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-    button,input,textarea{font:inherit}
-    button{border:0;cursor:pointer}
-    a{color:#a8c7ff}
-
-    .hidden{display:none!important}
-
-    .login-screen{
-      width:100%;
-      height:100dvh;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      padding:22px;
-      background:
-        radial-gradient(circle at top, rgba(108,99,255,.18), transparent 40%),
-        linear-gradient(180deg,#0c0c0f,#111119);
-    }
-
-    .login-card{
-      width:100%;
-      max-width:390px;
-      background:rgba(26,26,34,.92);
-      border:1px solid var(--line);
-      border-radius:28px;
-      padding:28px;
-      box-shadow:0 24px 70px rgba(0,0,0,.55);
-      backdrop-filter:blur(14px);
-    }
-
-    .logo{
-      width:78px;height:78px;border-radius:26px;
-      display:flex;align-items:center;justify-content:center;
-      background:linear-gradient(135deg,var(--accent),#4a42dd);
-      color:#fff;font-size:36px;font-weight:900;
-      margin:0 auto 14px;
-      box-shadow:0 18px 48px rgba(108,99,255,.4);
-    }
-
-    .login-title{text-align:center;font-size:30px;font-weight:900;letter-spacing:-1px}
-    .login-sub{text-align:center;color:var(--muted2);font-size:13px;margin:4px 0 24px}
-    .field-label{font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin:14px 0 7px}
-    .field{
-      width:100%;border:1px solid var(--line);background:#111119;color:var(--text);
-      border-radius:14px;padding:14px 15px;outline:none;
-    }
-    .field:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(108,99,255,.12)}
-    .error{font-size:13px;color:var(--red);min-height:20px;margin:10px 0}
-    .primary-btn{
-      width:100%;padding:15px;border-radius:15px;
-      background:linear-gradient(135deg,var(--accent),#4a42dd);
-      color:white;font-weight:800;box-shadow:0 10px 28px rgba(108,99,255,.34);
-    }
-    .primary-btn:disabled{opacity:.55;cursor:not-allowed}
-    .demo-box{
-      margin-top:18px;border:1px dashed var(--line);border-radius:16px;padding:12px;
-      color:var(--muted);font-size:13px;line-height:1.5;background:rgba(255,255,255,.02)
-    }
-    .demo-box strong{color:var(--text)}
-
-    .app{
-      width:100%;
-      height:100dvh;
-      display:grid;
-      grid-template-columns:330px minmax(0,1fr) 280px;
-      background:var(--bg);
-    }
-
-    .sidebar,.rightbar{
-      background:var(--panel);
-      border-right:1px solid var(--line);
-      overflow:hidden;
-      display:flex;
-      flex-direction:column;
-    }
-    .rightbar{border-right:0;border-left:1px solid var(--line)}
-
-    .side-head{
-      padding:16px;
-      border-bottom:1px solid var(--line);
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      gap:12px;
-    }
-
-    .brand{display:flex;align-items:center;gap:10px}
-    .brand-mark{
-      width:38px;height:38px;border-radius:14px;background:linear-gradient(135deg,var(--accent),#4a42dd);
-      display:flex;align-items:center;justify-content:center;font-weight:900
-    }
-    .brand h1{font-size:17px;line-height:1}
-    .brand span{display:block;font-size:11px;color:var(--muted2);margin-top:3px}
-
-    .icon-btn{
-      width:38px;height:38px;border-radius:13px;
-      background:var(--panel2);color:var(--text);
-      border:1px solid var(--line);
-      display:flex;align-items:center;justify-content:center;
-    }
-
-    .section-title{
-      padding:15px 16px 8px;
-      color:var(--muted2);
-      font-size:11px;
-      font-weight:900;
-      text-transform:uppercase;
-      letter-spacing:1px;
-    }
-
-    .list{padding:0 10px 12px;overflow-y:auto}
-    .chat-item{
-      width:100%;
-      display:flex;
-      align-items:center;
-      gap:11px;
-      padding:10px;
-      border-radius:16px;
-      background:transparent;
-      color:var(--text);
-      text-align:left;
-      margin-bottom:4px;
-      border:1px solid transparent;
-    }
-    .chat-item:hover,.chat-item.active{background:var(--panel2);border-color:var(--line)}
-    .room-avatar,.avatar{
-      width:44px;height:44px;border-radius:16px;
-      display:flex;align-items:center;justify-content:center;
-      flex:0 0 auto;color:white;font-weight:900;
-    }
-    .room-avatar{background:rgba(108,99,255,.18);border:1px solid rgba(108,99,255,.28)}
-    .avatar.small{width:44px;height:44px;font-size:13px}
-    .chat-meta{min-width:0;flex:1}
-    .chat-title{font-size:14px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .chat-sub{font-size:12px;color:var(--muted2);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#555;margin-right:6px}
-    .dot.on{background:var(--green);box-shadow:0 0 0 3px rgba(34,197,94,.12)}
-
-    .main{
-      min-width:0;
-      display:flex;
-      flex-direction:column;
-      height:100dvh;
-      background:
-        radial-gradient(circle at top right,rgba(108,99,255,.10),transparent 35%),
-        var(--bg);
-    }
-
-    .chat-head{
-      min-height:72px;
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      padding:14px 18px;
-      border-bottom:1px solid var(--line);
-      background:rgba(12,12,15,.86);
-      backdrop-filter:blur(12px);
-    }
-    .chat-head h2{font-size:18px}
-    .chat-head p{font-size:12px;color:var(--muted2);margin-top:2px}
-    .me-chip{
-      display:flex;align-items:center;gap:9px;
-      background:var(--panel);border:1px solid var(--line);
-      padding:8px 10px;border-radius:16px;
-    }
-    .me-chip .avatar{width:34px;height:34px;border-radius:12px;font-size:12px}
-    .me-chip strong{font-size:13px}
-    .me-chip span{font-size:11px;color:var(--muted2);display:block}
-
-    .messages{
-      flex:1;
-      overflow-y:auto;
-      padding:18px;
-      display:flex;
-      flex-direction:column;
-      gap:10px;
-    }
-    .message-row{display:flex;gap:9px;align-items:flex-end;max-width:78%}
-    .message-row.mine{align-self:flex-end;flex-direction:row-reverse}
-    .message-row.other{align-self:flex-start}
-    .message-row.system{align-self:center;max-width:90%}
-    .msg-avatar{
-      width:30px;height:30px;border-radius:11px;
-      display:flex;align-items:center;justify-content:center;
-      color:white;font-size:11px;font-weight:900;flex:0 0 auto;
-    }
-    .bubble{
-      padding:10px 12px;
-      background:var(--panel);
-      border:1px solid var(--line);
-      border-radius:16px 16px 16px 5px;
-      box-shadow:0 4px 16px rgba(0,0,0,.18);
-    }
-    .mine .bubble{
-      background:linear-gradient(135deg,#635cff,#4b43d9);
-      border-color:rgba(255,255,255,.10);
-      border-radius:16px 16px 5px 16px;
-    }
-    .bubble-head{
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      gap:16px;
-      margin-bottom:4px;
-      font-size:11px;
-      color:var(--muted);
-    }
-    .mine .bubble-head{color:rgba(255,255,255,.72)}
-    .bubble-head strong{color:inherit}
-    .bubble-head span{opacity:.8}
-    .bubble-text{
-      font-size:14px;
-      line-height:1.42;
-      white-space:pre-wrap;
-      word-break:break-word;
-    }
-    .system-msg{
-      padding:9px 14px;
-      border-radius:999px;
-      background:rgba(108,99,255,.12);
-      border:1px solid rgba(108,99,255,.22);
-      color:var(--muted);
-      font-size:12px;
-      text-align:center;
-    }
-
-    .typing{
-      height:20px;
-      padding:0 20px;
-      color:var(--muted2);
-      font-size:12px;
-      opacity:0;
-      transition:.2s;
-    }
-    .typing.show{opacity:1}
-
-    .composer{
-      padding:12px;
-      border-top:1px solid var(--line);
-      background:rgba(26,26,34,.92);
-      display:flex;
-      gap:10px;
-      align-items:flex-end;
-    }
-    .composer textarea{
-      flex:1;
-      max-height:120px;
-      min-height:46px;
-      resize:none;
-      border:1px solid var(--line);
-      background:#111119;
-      color:var(--text);
-      border-radius:16px;
-      padding:13px 14px;
-      outline:none;
-    }
-    .send-btn{
-      width:48px;height:46px;border-radius:16px;
-      background:linear-gradient(135deg,var(--accent),#4a42dd);
-      color:white;font-size:18px;font-weight:900;
-    }
-
-    .right-head{padding:18px 16px;border-bottom:1px solid var(--line)}
-    .right-head h3{font-size:15px}
-    .right-head p{font-size:12px;color:var(--muted2);margin-top:2px}
-    .actions{display:grid;grid-template-columns:1fr;gap:8px;padding:12px 16px;border-bottom:1px solid var(--line)}
-    .action-btn{
-      padding:11px 12px;border-radius:14px;background:var(--panel2);
-      border:1px solid var(--line);color:var(--text);font-weight:800;text-align:left;
-    }
-
-    .users-list{padding:12px;overflow-y:auto}
-    .user-card{
-      display:flex;align-items:center;gap:10px;
-      background:rgba(255,255,255,.025);
-      border:1px solid var(--line);
-      border-radius:16px;
-      padding:10px;
-      margin-bottom:8px;
-    }
-    .user-card .avatar{width:40px;height:40px;border-radius:14px;font-size:12px}
-    .user-info{min-width:0;flex:1}
-    .user-name{font-size:13px;font-weight:900}
-    .user-role{font-size:11px;color:var(--muted2);margin-top:2px}
-    .status-pill{
-      font-size:10px;padding:4px 7px;border-radius:999px;
-      background:rgba(255,255,255,.06);color:var(--muted2);
-      text-transform:uppercase;font-weight:900;
-    }
-    .status-pill.online{background:rgba(34,197,94,.12);color:var(--green)}
-
-    .toast{
-      position:fixed;
-      top:18px;
-      left:50%;
-      transform:translate(-50%,-20px);
-      background:var(--panel2);
-      border:1px solid var(--line);
-      color:var(--text);
-      border-radius:14px;
-      padding:12px 15px;
-      opacity:0;
-      pointer-events:none;
-      transition:.25s;
-      z-index:30;
-      box-shadow:0 14px 40px rgba(0,0,0,.42);
-      font-weight:800;
-      font-size:13px;
-    }
-    .toast.show{opacity:1;transform:translate(-50%,0)}
-    .toast.ok{border-color:rgba(34,197,94,.35)}
-    .toast.bad{border-color:rgba(239,68,68,.35)}
-
-    @media (max-width: 980px){
-      .app{grid-template-columns:310px minmax(0,1fr)}
-      .rightbar{display:none}
-    }
-
-    @media (max-width: 720px){
-      .app{grid-template-columns:1fr;height:100dvh}
-      .sidebar{
-        position:absolute;
-        inset:0 auto 0 0;
-        width:86%;
-        max-width:330px;
-        z-index:10;
-        transform:translateX(-100%);
-        transition:.25s;
-        box-shadow:20px 0 60px rgba(0,0,0,.45);
-      }
-      body.menu-open .sidebar{transform:translateX(0)}
-      .chat-head{padding:12px}
-      .mobile-menu{display:flex!important}
-      .message-row{max-width:92%}
-      .me-chip strong,.me-chip span{display:none}
-    }
-
-    .mobile-menu{display:none}
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BINET Chat</title>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+import { getDatabase, ref, set, get, push, update, onChildAdded } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyB0HVVTUhkswLkLORXLIZwOCoSLKsKDpuC",
+  authDomain: "binet-e3ac3.firebaseapp.com",
+  databaseURL: "https://binet-e3ac3-default-rtdb.firebaseio.com",
+  projectId: "binet-e3ac3",
+  storageBucket: "binet-e3ac3.appspot.com",
+  messagingSenderId: "272460687857",
+  appId: "1:272460687857:web:badaa5c917b5192203fc50"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+let currentUser = null;
+let currentChat = "general";
+
+const users = {
+  rich: {pass:"1234", name:"Richard", color:"#6c63ff"},
+  ariana: {pass:"1234", name:"Ariana", color:"#22c55e"}
+};
+
+window.login = async function(){
+  let u = document.getElementById("user").value;
+  let p = document.getElementById("pass").value;
+
+  if(!users[u] || users[u].pass !== p){
+    alert("Usuario incorrecto");
+    return;
+  }
+
+  currentUser = u;
+
+  document.getElementById("login").style.display="none";
+  document.getElementById("app").style.display="flex";
+
+  listenMessages();
+}
+
+function listenMessages(){
+  const chatRef = ref(db, "messages/"+currentChat);
+
+  onChildAdded(chatRef, snap=>{
+    let msg = snap.val();
+    let div = document.createElement("div");
+
+    div.className = msg.user === currentUser ? "mine" : "other";
+
+    div.innerHTML = `
+      <b>${msg.user}</b><br>
+      ${msg.text}
+    `;
+
+    document.getElementById("chat").appendChild(div);
+  });
+}
+
+window.send = function(){
+  let txt = document.getElementById("msg").value;
+  if(!txt) return;
+
+  push(ref(db,"messages/"+currentChat),{
+    user: currentUser,
+    text: txt,
+    time: Date.now()
+  });
+
+  document.getElementById("msg").value="";
+}
+</script>
+
+<style>
+body{margin:0;font-family:Arial;background:#0c0c0f;color:white}
+#login{display:flex;height:100vh;align-items:center;justify-content:center}
+.box{background:#1a1a22;padding:30px;border-radius:20px;width:300px}
+input{width:100%;margin:10px 0;padding:10px;border-radius:10px;border:none}
+button{width:100%;padding:10px;border:none;border-radius:10px;background:#6c63ff;color:white}
+
+#app{display:none;height:100vh}
+#chat{flex:1;overflow:auto;padding:10px}
+.mine{background:#6c63ff;padding:10px;margin:5px;border-radius:10px;align-self:flex-end}
+.other{background:#222;padding:10px;margin:5px;border-radius:10px}
+#sendBox{display:flex}
+#msg{flex:1;padding:10px}
+</style>
 </head>
 
 <body>
-  <div id="toast" class="toast"></div>
 
-  <section id="loginScreen" class="login-screen">
-    <div class="login-card">
-      <div class="logo">B</div>
-      <div class="login-title">BINET</div>
-      <div class="login-sub">Chat interno en vivo con Firebase</div>
+<div id="login">
+  <div class="box">
+    <h2>BINET</h2>
+    <input id="user" placeholder="usuario">
+    <input id="pass" type="password" placeholder="clave">
+    <button onclick="login()">Ingresar</button>
+    <p>rich / 1234</p>
+    <p>ariana / 1234</p>
+  </div>
+</div>
 
-      <div class="field-label">Usuario</div>
-      <input id="username" class="field" placeholder="rich o ariana" autocomplete="username" />
+<div id="app">
+  <div id="chat"></div>
+  <div id="sendBox">
+    <input id="msg">
+    <button onclick="send()">➤</button>
+  </div>
+</div>
 
-      <div class="field-label">Contraseña</div>
-      <input id="password" class="field" type="password" placeholder="1234" autocomplete="current-password" />
-
-      <div id="loginError" class="error"></div>
-      <button id="loginBtn" class="primary-btn">Ingresar</button>
-
-      <div class="demo-box">
-        <strong>Usuarios de prueba:</strong><br>
-        Administrador: <strong>rich</strong> / clave <strong>1234</strong><br>
-        Usuario: <strong>ariana</strong> / clave <strong>1234</strong>
-      </div>
-    </div>
-  </section>
-
-  <section id="appScreen" class="app hidden">
-    <aside class="sidebar">
-      <div class="side-head">
-        <div class="brand">
-          <div class="brand-mark">B</div>
-          <div>
-            <h1>BINET</h1>
-            <span>Live Chat</span>
-          </div>
-        </div>
-        <button class="icon-btn" onclick="document.body.classList.remove('menu-open')">✕</button>
-      </div>
-
-      <div class="section-title">Canales</div>
-      <div id="roomsList" class="list"></div>
-
-      <div class="section-title">Mensajes directos</div>
-      <div id="chatList" class="list"></div>
-    </aside>
-
-    <main class="main">
-      <header class="chat-head">
-        <div style="display:flex;align-items:center;gap:10px;min-width:0">
-          <button class="icon-btn mobile-menu" onclick="document.body.classList.add('menu-open')">☰</button>
-          <div style="min-width:0">
-            <h2 id="chatTitle">General</h2>
-            <p id="chatSubtitle">Canal grupal en vivo</p>
-          </div>
-        </div>
-
-        <div class="me-chip">
-          <div id="meAvatar" class="avatar">RU</div>
-          <div>
-            <strong id="meName">Usuario</strong>
-            <span id="meRole">rol</span>
-          </div>
-          <button id="logoutBtn" class="icon-btn" title="Cerrar sesión">⏻</button>
-        </div>
-      </header>
-
-      <div id="messages" class="messages"></div>
-      <div id="typingBox" class="typing"></div>
-
-      <footer class="composer">
-        <textarea id="messageInput" placeholder="Escribe un mensaje... Enter para enviar, Shift+Enter para salto"></textarea>
-        <button id="sendBtn" class="send-btn">➤</button>
-      </footer>
-    </main>
-
-    <aside class="rightbar">
-      <div class="right-head">
-        <h3>Panel</h3>
-        <p>Usuarios conectados y administración</p>
-      </div>
-
-      <div class="actions">
-        <button id="newUserBtn" class="action-btn">➕ Crear usuario</button>
-        <button id="newRoomBtn" class="action-btn"># Crear canal</button>
-      </div>
-
-      <div class="section-title">Usuarios</div>
-      <div id="usersList" class="users-list"></div>
-    </aside>
-  </section>
 </body>
 </html>
