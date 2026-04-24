@@ -119,6 +119,75 @@ label{display:block;margin:14px 0 7px;color:#b7b7ca;font-size:12px;font-weight:9
   .cardBox{margin-bottom:10px;padding:14px}
   .form{display:block}.form input,.form textarea,.form select,.form button{margin-bottom:8px}
 }
+
+/* ===== FIX DEFINITIVO INPUT MÓVIL / SAFARI ===== */
+@media(max-width:850px){
+  #app{
+    height:100dvh;
+    min-height:100dvh;
+    overflow:hidden;
+  }
+
+  .main{
+    flex:1;
+    height:auto !important;
+    min-height:0;
+    overflow:hidden;
+  }
+
+  .content{
+    flex:1;
+    height:auto !important;
+    min-height:0;
+    overflow:hidden;
+  }
+
+  .chatLayout{
+    height:100% !important;
+    min-height:0;
+    overflow:hidden;
+  }
+
+  .leftPanel{
+    flex:0 0 88px;
+  }
+
+  .chatArea{
+    flex:1 1 auto;
+    height:auto !important;
+    min-height:0;
+    overflow:hidden;
+  }
+
+  #messages{
+    flex:1 1 auto;
+    min-height:0;
+    overflow-y:auto;
+    padding-bottom:14px;
+    -webkit-overflow-scrolling:touch;
+  }
+
+  .composer{
+    flex:0 0 62px;
+    min-height:62px;
+    position:relative;
+    z-index:5;
+    padding-bottom:max(9px, env(safe-area-inset-bottom));
+  }
+
+  .sidebar{
+    flex:0 0 64px;
+    min-height:64px;
+    max-height:64px;
+    position:relative;
+    z-index:8;
+  }
+
+  .top{
+    flex:0 0 58px;
+  }
+}
+
 </style>
 </head>
 
