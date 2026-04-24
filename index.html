@@ -118,8 +118,33 @@ async function firebaseUpdateEmployee(userId, data){
 }
 async function firebaseDeleteEmployee(user){
   if (!FIREBASE_READY || !user?.id) return;
-  await fbDb.collection("users").doc(user.id).set({active:false, online:false, deletedAt:firebase.firestore.FieldValue.serverTimestamp()}, {merge:true});
-  if (user.username) await fbDb.collection("usernames").doc(cleanUsername(user.username)).set({active:false}, {merge:true});
+  const deletedPayload = {
+    ...user,
+    active:false,
+    online:false,
+    deletedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    deletedBy: fbAuth?.currentUser?.uid || null
+  };
+  const batch = fbDb.batch();
+  batch.set(fbDb.collection("users").doc(user.id), {
+    active:false,
+    online:false,
+    deletedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    deletedBy: fbAuth?.currentUser?.uid || null
+  }, {merge:true});
+  batch.set(fbDb.collection("deleted_users").doc(user.id), deletedPayload, {merge:true});
+  if (user.username) {
+    batch.set(fbDb.collection("usernames").doc(cleanUsername(user.username)), {active:false, deletedAt:firebase.firestore.FieldValue.serverTimestamp()}, {merge:true});
+  }
+  await batch.commit();
+}
+
+async function firebaseGrantXp(user, amount){
+  if (!FIREBASE_READY || !user?.id) return;
+  await fbDb.collection("users").doc(user.id).set({
+    xp: Number(user.xp||0) + Number(amount||0),
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  }, {merge:true});
 }
 
 
@@ -692,13 +717,21 @@ function NexusApp() {
   useEffect(() => { window.__BINET_AREAS__ = areas; }, [areas]);
   useEffect(() => { window.__BINET_ALLUSERS__ = [...users, {...me, id:"me"}]; }, [users, me]);
   useEffect(() => {
-    if (!FIREBASE_READY) return;
-    const unsubUsers = fbDb.collection("users").where("active","!=",false).onSnapshot(snap => {
-      const remoteUsers = snap.docs.map(d => ({id:d.id, ...d.data()}));
-      if (remoteUsers.length) setUsers(remoteUsers.filter(u => u.id !== me.uid));
-    });
+    // IMPORTANTE: la lectura online se activa DESPUÉS del login.
+    // Antes fallaba porque intentaba leer Firestore sin sesión y las reglas lo bloqueaban.
+    if (!FIREBASE_READY || screen !== "app" || !fbAuth?.currentUser) return;
+    const unsubUsers = fbDb.collection("users").where("active","==",true).onSnapshot(
+      snap => {
+        const remoteUsers = snap.docs.map(d => ({id:d.id, ...d.data()}));
+        setUsers(remoteUsers.filter(u => u.id !== fbAuth.currentUser.uid));
+      },
+      err => {
+        console.error("Error leyendo usuarios desde Firestore:", err);
+        addToast("Error Firestore", err.message || "No se pudo leer usuarios", "⚠️", T.red);
+      }
+    );
     return () => unsubUsers();
-  }, []);
+  }, [screen, addToast]);
   const [groups, setGroups] = useState(GROUPS);
   const [achievements, setAchievements] = useState(ACHIEVEMENTS_CATALOG);
   const [toasts, setToasts] = useState([]);
@@ -1789,8 +1822,10 @@ function AdminUsers({users, setUsers, setModal, addToast, askConfirm}) {
           </div>
           <XPBar xp={u.xp}/>
           <div style={{display:"flex",gap:6,marginTop:10}}>
-            <button onClick={()=>{
-              setUsers(us=>us.map(x=>x.id!==u.id?x:{...x,xp:x.xp+100}));
+            <button onClick={async()=>{
+              const nextXp = Number(u.xp||0)+100;
+              setUsers(us=>us.map(x=>x.id!==u.id?x:{...x,xp:nextXp}));
+              try { if (FIREBASE_READY) await firebaseGrantXp(u,100); } catch(e){ addToast("No se guardó XP", e.message, "⚠️", T.red); }
               addToast("+100 XP otorgados",`A ${u.name}`,"⚡",T.accent);
             }} style={{padding:"7px 10px",borderRadius:9,background:`${T.accent}18`,border:`1px solid ${T.accent}33`,fontSize:12,color:T.accent2,fontWeight:500}}>
               +100 XP
@@ -1798,22 +1833,34 @@ function AdminUsers({users, setUsers, setModal, addToast, askConfirm}) {
             <button onClick={()=>setModal({type:"editUser",data:u})} style={{flex:1,padding:"7px",borderRadius:9,background:T.bg3,border:`1px solid ${T.border}`,fontSize:12,color:T.text2,fontWeight:500}}>
               ✏️ Editar
             </button>
-            <button onClick={()=>{
+            <button onClick={async()=>{
               (askConfirm||window.confirm)
                 ? (askConfirm
-                    ? askConfirm(`¿Eliminar a ${u.name}? Esta acción no se puede deshacer.`, ()=>{
+                    ? askConfirm(`¿Eliminar a ${u.name}? Quedará desactivado y guardado en deleted_users.`, async()=>{
+                        const previous = users;
                         setUsers(us=>us.filter(x=>x.id!==u.id));
-                        if (FIREBASE_READY) firebaseDeleteEmployee(u);
-                        else AUTH_REGISTRY = AUTH_REGISTRY.filter(a=>a.employeeId!==u.id);
-                        addToast("Usuario eliminado",u.name,"🗑️",T.red);
+                        try {
+                          if (FIREBASE_READY) await firebaseDeleteEmployee(u);
+                          else AUTH_REGISTRY = AUTH_REGISTRY.filter(a=>a.employeeId!==u.id);
+                          addToast("Usuario eliminado",u.name,"🗑️",T.red);
+                        } catch(e) {
+                          setUsers(previous);
+                          addToast("No se eliminó en Firebase", e.message || "Error de permisos", "⚠️", T.red);
+                        }
                       })
                     : null)
                 : null;
               if(!askConfirm && window.confirm(`¿Eliminar a ${u.name}?`)){
+                const previous = users;
                 setUsers(us=>us.filter(x=>x.id!==u.id));
-                if (FIREBASE_READY) firebaseDeleteEmployee(u);
-                else AUTH_REGISTRY = AUTH_REGISTRY.filter(a=>a.employeeId!==u.id);
-                addToast("Usuario eliminado",u.name,"🗑️",T.red);
+                try {
+                  if (FIREBASE_READY) await firebaseDeleteEmployee(u);
+                  else AUTH_REGISTRY = AUTH_REGISTRY.filter(a=>a.employeeId!==u.id);
+                  addToast("Usuario eliminado",u.name,"🗑️",T.red);
+                } catch(e) {
+                  setUsers(previous);
+                  addToast("No se eliminó en Firebase", e.message || "Error de permisos", "⚠️", T.red);
+                }
               }
             }} style={{width:34,height:34,borderRadius:9,background:"rgba(239,68,68,.1)",border:`1px solid rgba(239,68,68,.3)`,fontSize:16,color:T.red,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}}>
               🗑️
@@ -3090,7 +3137,7 @@ function CreateUserModal({close, setUsers, addToast}) {
         </FormField>
         <FormField label="Contraseña">
           <div style={{position:"relative"}}>
-            <input value={form.password} onChange={e=>upd("password",e.target.value)} type={showPass?"text":"password"} placeholder="mínimo 4 caracteres" style={{width:"100%",background:T.bg4,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 40px 11px 14px",fontSize:14,color:T.text,letterSpacing:"1px"}}/>
+            <input value={form.password} onChange={e=>upd("password",e.target.value)} type={showPass?"text":"password"} placeholder="mínimo 6 caracteres" style={{width:"100%",background:T.bg4,border:`1px solid ${T.border2}`,borderRadius:12,padding:"11px 40px 11px 14px",fontSize:14,color:T.text,letterSpacing:"1px"}}/>
             <button onClick={()=>setShowPass(s=>!s)} style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",fontSize:14,color:T.text3,cursor:"pointer"}}>{showPass?"🙈":"👁️"}</button>
           </div>
         </FormField>
@@ -3120,15 +3167,20 @@ function EditUserModal({close, user, setUsers, addToast}) {
   const [showPass, setShowPass] = useState(false);
 
   async function save() {
-    const updated = {...form, username:form.username||authEntry?.username||""};
+    const updated = {...form, username:cleanUsername(form.username||authEntry?.username||""), updatedAt: FIREBASE_READY ? firebase.firestore.FieldValue.serverTimestamp() : Date.now()};
     setUsers(us=>us.map(u=>u.id!==user.id?u:updated));
-    if (FIREBASE_READY) {
-      await firebaseUpdateEmployee(user.id, updated);
-    } else if (authEntry) {
-      AUTH_REGISTRY = AUTH_REGISTRY.map(a=>a.employeeId!==user.id?a:{...a, username: form.username||a.username, password: newPass.trim()||a.password});
+    try {
+      if (FIREBASE_READY) {
+        await firebaseUpdateEmployee(user.id, updated);
+        // Nota: cambiar contraseña de otro usuario desde el cliente requiere Cloud Function/Admin SDK.
+      } else if (authEntry) {
+        AUTH_REGISTRY = AUTH_REGISTRY.map(a=>a.employeeId!==user.id?a:{...a, username: updated.username||a.username, password: newPass.trim()||a.password});
+      }
+      addToast("Usuario actualizado",form.name,"👤",T.blue);
+      close();
+    } catch(e) {
+      addToast("No se guardó en Firebase", e.message || "Error de permisos", "⚠️", T.red);
     }
-    addToast("Usuario actualizado",form.name,"👤",T.blue);
-    close();
   }
 
   return (
