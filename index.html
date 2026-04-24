@@ -53,19 +53,31 @@ function initialsFromName(name){
 }
 async function firebaseCreateEmployee(form){
   if (!FIREBASE_READY) throw new Error("Configura firebaseConfig antes de crear usuarios.");
+
   const username = cleanUsername(form.username);
+  if (!username) throw new Error("El usuario de acceso es requerido");
+
   const email = usernameToEmail(username);
   const usernameRef = fbDb.collection("usernames").doc(username);
-  const exists = await usernameRef.get();
-  if (exists.exists) throw new Error("Ese nombre de usuario ya está en uso");
 
-  const secondaryName = "secondary-" + Date.now();
+  // 1) Validar que no exista el username en Firestore
+  const exists = await usernameRef.get();
+  if (exists.exists && exists.data()?.active !== false) {
+    throw new Error("Ese nombre de usuario ya está en uso");
+  }
+
+  // 2) Crear credencial REAL en Firebase Authentication sin cerrar la sesión del admin.
+  //    Se usa una app secundaria para que el admin no sea reemplazado por el usuario nuevo.
+  const secondaryName = "secondary-" + Date.now() + "-" + Math.random().toString(36).slice(2);
   const secondaryApp = firebase.initializeApp(firebaseConfig, secondaryName);
   const secondaryAuth = secondaryApp.auth();
+
+  let cred = null;
   try {
-    const cred = await secondaryAuth.createUserWithEmailAndPassword(email, form.password);
+    cred = await secondaryAuth.createUserWithEmailAndPassword(email, form.password);
     const uid = cred.user.uid;
     await cred.user.updateProfile({displayName: form.name.trim()});
+
     const newUser = {
       id: uid,
       uid,
@@ -82,34 +94,116 @@ async function firebaseCreateEmployee(form){
       badges: [],
       yearHistory: [],
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
       active: true
     };
-    await fbDb.collection("users").doc(uid).set(newUser, {merge:true});
-    await usernameRef.set({uid, email, username, active:true, createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+
+    // 3) Guardar PERFIL + MAPA username -> email/uid en una sola operación.
+    //    El login depende de /usernames/{usuario}. Si no existe, Auth sí existe pero el usuario no entra.
+    const batch = fbDb.batch();
+    batch.set(fbDb.collection("users").doc(uid), newUser, {merge:true});
+    batch.set(usernameRef, {
+      uid,
+      email,
+      username,
+      active:true,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    }, {merge:true});
+    await batch.commit();
+
     await secondaryAuth.signOut();
     await secondaryApp.delete();
-    return {...newUser, createdAt: Date.now()};
+    return {...newUser, createdAt: Date.now(), updatedAt: Date.now()};
   } catch(e) {
     try { await secondaryAuth.signOut(); await secondaryApp.delete(); } catch(_e) {}
-    if (String(e.code||"").includes("email-already-in-use")) throw new Error("Ese usuario ya existe en Firebase Authentication");
+
+    if (String(e.code||"").includes("email-already-in-use")) {
+      throw new Error("Ese usuario ya existe en Firebase Authentication. Usa otro usuario o elimina/restaura el anterior.");
+    }
+    if (String(e.code||"").includes("permission-denied")) {
+      throw new Error("Firebase bloqueó el guardado. Revisa las reglas Firestore y que tu usuario administrador tenga role Admin o Manager.");
+    }
     throw e;
   }
 }
 async function firebaseLoginWithUsername(username, password){
   if (!FIREBASE_READY) throw new Error("Configura firebaseConfig antes de iniciar sesión con Firebase.");
+
   const userNameKey = cleanUsername(username);
+  if (!userNameKey) throw new Error("Ingresa usuario y contraseña");
+
+  let email = null;
+  let mappedUid = null;
+
+  // Login normal: usuario -> usernames/{usuario} -> email -> Firebase Auth
   const usernameDoc = await fbDb.collection("usernames").doc(userNameKey).get();
-  if (!usernameDoc.exists) throw new Error("Usuario o contraseña incorrectos");
-  const {email, uid, active} = usernameDoc.data();
-  if (active === false) throw new Error("Usuario desactivado");
-  const cred = await fbAuth.signInWithEmailAndPassword(email, password);
-  const realUid = uid || cred.user.uid;
-  const userDoc = await fbDb.collection("users").doc(realUid).get();
-  if (!userDoc.exists) throw new Error("Empleado no encontrado en Firestore");
+  if (usernameDoc.exists) {
+    const data = usernameDoc.data() || {};
+    if (data.active === false) throw new Error("Usuario desactivado");
+    email = data.email || usernameToEmail(userNameKey);
+    mappedUid = data.uid || null;
+  } else {
+    // Rescate automático: si se creó Auth pero no se creó el documento usernames,
+    // intenta entrar usando el email técnico usuario@binet.local.
+    email = usernameToEmail(userNameKey);
+  }
+
+  let cred;
+  try {
+    cred = await fbAuth.signInWithEmailAndPassword(email, password);
+  } catch(e) {
+    throw new Error("Usuario o contraseña incorrectos");
+  }
+
+  const realUid = mappedUid || cred.user.uid;
+  let userDoc = await fbDb.collection("users").doc(realUid).get();
+
+  // Rescate: si no existe perfil, crear uno básico para no bloquear el acceso.
+  if (!userDoc.exists) {
+    const basicUser = {
+      id: realUid,
+      uid: realUid,
+      name: cred.user.displayName || userNameKey,
+      username: userNameKey,
+      email,
+      role: "Employee",
+      dept: "General",
+      avatar: initialsFromName(cred.user.displayName || userNameKey),
+      color: "#6c63ff",
+      online: true,
+      xp: 0,
+      level: 1,
+      badges: [],
+      yearHistory: [],
+      active: true,
+      recoveredAt: firebase.firestore.FieldValue.serverTimestamp()
+    };
+    await fbDb.collection("users").doc(realUid).set(basicUser, {merge:true});
+    await fbDb.collection("usernames").doc(userNameKey).set({uid:realUid,email,username:userNameKey,active:true}, {merge:true});
+    userDoc = await fbDb.collection("users").doc(realUid).get();
+  }
+
   const employee = userDoc.data();
-  await fbDb.collection("users").doc(realUid).set({online:true,lastLogin:firebase.firestore.FieldValue.serverTimestamp()}, {merge:true});
-  return {...employee, id: realUid, uid: realUid, online:true};
+  if (employee.active === false) throw new Error("Usuario desactivado");
+
+  await fbDb.collection("users").doc(realUid).set({
+    online:true,
+    lastLogin:firebase.firestore.FieldValue.serverTimestamp()
+  }, {merge:true});
+
+  // Asegurar que el mapa username quede creado/corregido para futuros ingresos.
+  await fbDb.collection("usernames").doc(userNameKey).set({
+    uid: realUid,
+    email,
+    username: userNameKey,
+    active: true,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  }, {merge:true});
+
+  return {...employee, id: realUid, uid: realUid, username:userNameKey, email, online:true};
 }
+
 async function firebaseUpdateEmployee(userId, data){
   if (!FIREBASE_READY) return;
   const copy = {...data};
