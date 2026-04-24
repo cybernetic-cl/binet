@@ -46,7 +46,28 @@ function cleanUsername(v){
 }
 function usernameToEmail(username){
   const safe = cleanUsername(username).replace(/[^a-z0-9._-]/g,"_");
+  const project = (firebaseConfig.projectId || "binet").replace(/[^a-z0-9-]/gi,"").toLowerCase() || "binet";
+  return `${safe}@${project}.binet.app`;
+}
+function legacyUsernameToEmail(username){
+  const safe = cleanUsername(username).replace(/[^a-z0-9._-]/g,"_");
   return `${safe}@binet.local`;
+}
+async function firebaseSafeSignInWithUsername(username, password, preferredEmail){
+  const candidates = [];
+  [preferredEmail, usernameToEmail(username), legacyUsernameToEmail(username)].forEach(e => {
+    if (e && !candidates.includes(e)) candidates.push(e);
+  });
+  let lastError = null;
+  for (const email of candidates) {
+    try {
+      const cred = await fbAuth.signInWithEmailAndPassword(email, password);
+      return {cred, email};
+    } catch(e) {
+      lastError = e;
+    }
+  }
+  throw lastError || new Error("Usuario o contraseña incorrectos");
 }
 function initialsFromName(name){
   return String(name||"").trim().split(/\s+/).map(w=>w[0]).join("").toUpperCase().slice(0,2) || "U";
@@ -151,7 +172,9 @@ async function firebaseLoginWithUsername(username, password){
 
   let cred;
   try {
-    cred = await fbAuth.signInWithEmailAndPassword(email, password);
+    const signed = await firebaseSafeSignInWithUsername(userNameKey, password, email);
+    cred = signed.cred;
+    email = signed.email;
   } catch(e) {
     throw new Error("Usuario o contraseña incorrectos");
   }
@@ -806,7 +829,8 @@ function NexusApp() {
   const [messages, setMessages] = useState(SEED_MESSAGES);
   const [tasks, setTasks] = useState(SEED_TASKS);
   const [announcements, setAnnouncements] = useState(GLOBAL_ANNOUNCEMENTS);
-  const [users, setUsers] = useState(USERS);
+  // En Firebase no usamos usuarios semilla: evitamos que reaparezcan usuarios borrados al recargar.
+  const [users, setUsers] = useState(FIREBASE_READY ? [] : USERS);
   const [areas, setAreas] = useState(["Tecnología","Marketing","Ventas","RRHH","Finanzas","Operaciones","Legal","Dirección"]);
   useEffect(() => { window.__BINET_AREAS__ = areas; }, [areas]);
   useEffect(() => { window.__BINET_ALLUSERS__ = [...users, {...me, id:"me"}]; }, [users, me]);
