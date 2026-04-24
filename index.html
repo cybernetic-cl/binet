@@ -10,11 +10,118 @@
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Firebase SDK compat: Auth + Firestore -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
 </head>
 <body>
   <div id="root"></div>
   <script type="text/babel" data-presets="env,react">
 const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+/* ── FIREBASE CONFIG ───────────────────────────────────────
+   Reemplaza estos datos con la configuración de tu proyecto Firebase.
+   Activa Authentication > Email/Password y Firestore Database.
+*/
+const firebaseConfig = {
+  apiKey: "TU_API_KEY",
+  authDomain: "TU_PROYECTO.firebaseapp.com",
+  projectId: "TU_PROYECTO",
+  storageBucket: "TU_PROYECTO.appspot.com",
+  messagingSenderId: "TU_MESSAGING_ID",
+  appId: "TU_APP_ID"
+};
+
+const FIREBASE_READY = firebaseConfig.apiKey && firebaseConfig.apiKey !== "TU_API_KEY";
+let fbApp = null, fbAuth = null, fbDb = null;
+if (FIREBASE_READY) {
+  fbApp = firebase.apps.length ? firebase.app() : firebase.initializeApp(firebaseConfig);
+  fbAuth = firebase.auth();
+  fbDb = firebase.firestore();
+}
+
+function cleanUsername(v){
+  return String(v||"").trim().toLowerCase().replace(/\s+/g,"");
+}
+function usernameToEmail(username){
+  const safe = cleanUsername(username).replace(/[^a-z0-9._-]/g,"_");
+  return `${safe}@binet.local`;
+}
+function initialsFromName(name){
+  return String(name||"").trim().split(/\s+/).map(w=>w[0]).join("").toUpperCase().slice(0,2) || "U";
+}
+async function firebaseCreateEmployee(form){
+  if (!FIREBASE_READY) throw new Error("Configura firebaseConfig antes de crear usuarios.");
+  const username = cleanUsername(form.username);
+  const email = usernameToEmail(username);
+  const usernameRef = fbDb.collection("usernames").doc(username);
+  const exists = await usernameRef.get();
+  if (exists.exists) throw new Error("Ese nombre de usuario ya está en uso");
+
+  const secondaryName = "secondary-" + Date.now();
+  const secondaryApp = firebase.initializeApp(firebaseConfig, secondaryName);
+  const secondaryAuth = secondaryApp.auth();
+  try {
+    const cred = await secondaryAuth.createUserWithEmailAndPassword(email, form.password);
+    const uid = cred.user.uid;
+    await cred.user.updateProfile({displayName: form.name.trim()});
+    const newUser = {
+      id: uid,
+      uid,
+      name: form.name.trim(),
+      username,
+      email,
+      role: form.role || "Employee",
+      dept: form.dept || "General",
+      avatar: initialsFromName(form.name),
+      color: form.color || "#6c63ff",
+      online: false,
+      xp: 0,
+      level: 1,
+      badges: [],
+      yearHistory: [],
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      active: true
+    };
+    await fbDb.collection("users").doc(uid).set(newUser, {merge:true});
+    await usernameRef.set({uid, email, username, active:true, createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+    await secondaryAuth.signOut();
+    await secondaryApp.delete();
+    return {...newUser, createdAt: Date.now()};
+  } catch(e) {
+    try { await secondaryAuth.signOut(); await secondaryApp.delete(); } catch(_e) {}
+    if (String(e.code||"").includes("email-already-in-use")) throw new Error("Ese usuario ya existe en Firebase Authentication");
+    throw e;
+  }
+}
+async function firebaseLoginWithUsername(username, password){
+  if (!FIREBASE_READY) throw new Error("Configura firebaseConfig antes de iniciar sesión con Firebase.");
+  const userNameKey = cleanUsername(username);
+  const usernameDoc = await fbDb.collection("usernames").doc(userNameKey).get();
+  if (!usernameDoc.exists) throw new Error("Usuario o contraseña incorrectos");
+  const {email, uid, active} = usernameDoc.data();
+  if (active === false) throw new Error("Usuario desactivado");
+  const cred = await fbAuth.signInWithEmailAndPassword(email, password);
+  const realUid = uid || cred.user.uid;
+  const userDoc = await fbDb.collection("users").doc(realUid).get();
+  if (!userDoc.exists) throw new Error("Empleado no encontrado en Firestore");
+  const employee = userDoc.data();
+  await fbDb.collection("users").doc(realUid).set({online:true,lastLogin:firebase.firestore.FieldValue.serverTimestamp()}, {merge:true});
+  return {...employee, id: realUid, uid: realUid, online:true};
+}
+async function firebaseUpdateEmployee(userId, data){
+  if (!FIREBASE_READY) return;
+  const copy = {...data};
+  delete copy.password; delete copy.confirmPass;
+  await fbDb.collection("users").doc(userId).set(copy, {merge:true});
+}
+async function firebaseDeleteEmployee(user){
+  if (!FIREBASE_READY || !user?.id) return;
+  await fbDb.collection("users").doc(user.id).set({active:false, online:false, deletedAt:firebase.firestore.FieldValue.serverTimestamp()}, {merge:true});
+  if (user.username) await fbDb.collection("usernames").doc(cleanUsername(user.username)).set({active:false}, {merge:true});
+}
+
 
 /* ── FONT INJECTION ─────────────────────────────────────── */
 (() => {
@@ -584,6 +691,14 @@ function NexusApp() {
   const [areas, setAreas] = useState(["Tecnología","Marketing","Ventas","RRHH","Finanzas","Operaciones","Legal","Dirección"]);
   useEffect(() => { window.__BINET_AREAS__ = areas; }, [areas]);
   useEffect(() => { window.__BINET_ALLUSERS__ = [...users, {...me, id:"me"}]; }, [users, me]);
+  useEffect(() => {
+    if (!FIREBASE_READY) return;
+    const unsubUsers = fbDb.collection("users").where("active","!=",false).onSnapshot(snap => {
+      const remoteUsers = snap.docs.map(d => ({id:d.id, ...d.data()}));
+      if (remoteUsers.length) setUsers(remoteUsers.filter(u => u.id !== me.uid));
+    });
+    return () => unsubUsers();
+  }, []);
   const [groups, setGroups] = useState(GROUPS);
   const [achievements, setAchievements] = useState(ACHIEVEMENTS_CATALOG);
   const [toasts, setToasts] = useState([]);
@@ -616,24 +731,30 @@ function NexusApp() {
   }, []);
 
   /* ── LOGIN ── */
-  function doLogin() {
+  async function doLogin() {
     setLoginError("");
     const u = loginUser.trim().toLowerCase();
     const p = loginPass;
     if (!u || !p) { setLoginError("Ingresa usuario y contraseña"); return; }
-    // Check AUTH_REGISTRY (includes dynamically created users)
-    const authEntry = AUTH_REGISTRY.find(a => a.username.toLowerCase() === u && a.password === p);
-    if (!authEntry) { setLoginError("Usuario o contraseña incorrectos"); playSound("error"); return; }
-    // Find employee record
-    const emp = authEntry.employeeId === "admin_richard"
-      ? RICHARD
-      : users.find(x => x.id === authEntry.employeeId);
-    if (!emp) { setLoginError("Empleado no encontrado. Contacta al administrador."); return; }
-    setMe({...emp, id:"me"});
-    setScreen("app");
-    setLoginUser(""); setLoginPass("");
-    playSound("login");
-    setTimeout(() => addToast(`¡Bienvenido, ${emp.name}!`, `${emp.role} · ${emp.dept}`, "👋", T.accent), 500);
+    try {
+      let emp;
+      if (FIREBASE_READY) {
+        emp = await firebaseLoginWithUsername(u, p);
+      } else {
+        const authEntry = AUTH_REGISTRY.find(a => a.username.toLowerCase() === u && a.password === p);
+        if (!authEntry) throw new Error("Usuario o contraseña incorrectos");
+        emp = authEntry.employeeId === "admin_richard" ? RICHARD : users.find(x => x.id === authEntry.employeeId);
+      }
+      if (!emp) throw new Error("Empleado no encontrado. Contacta al administrador.");
+      setMe({...emp, id:"me"});
+      setScreen("app");
+      setLoginUser(""); setLoginPass("");
+      playSound("login");
+      setTimeout(() => addToast(`¡Bienvenido, ${emp.name}!`, `${emp.role} · ${emp.dept}`, "👋", T.accent), 500);
+    } catch(err) {
+      setLoginError(err?.message || "Usuario o contraseña incorrectos");
+      playSound("error");
+    }
   }
 
   /* ── SEND MESSAGE ── */
@@ -1682,14 +1803,16 @@ function AdminUsers({users, setUsers, setModal, addToast, askConfirm}) {
                 ? (askConfirm
                     ? askConfirm(`¿Eliminar a ${u.name}? Esta acción no se puede deshacer.`, ()=>{
                         setUsers(us=>us.filter(x=>x.id!==u.id));
-                        AUTH_REGISTRY = AUTH_REGISTRY.filter(a=>a.employeeId!==u.id);
+                        if (FIREBASE_READY) firebaseDeleteEmployee(u);
+                        else AUTH_REGISTRY = AUTH_REGISTRY.filter(a=>a.employeeId!==u.id);
                         addToast("Usuario eliminado",u.name,"🗑️",T.red);
                       })
                     : null)
                 : null;
               if(!askConfirm && window.confirm(`¿Eliminar a ${u.name}?`)){
                 setUsers(us=>us.filter(x=>x.id!==u.id));
-                AUTH_REGISTRY = AUTH_REGISTRY.filter(a=>a.employeeId!==u.id);
+                if (FIREBASE_READY) firebaseDeleteEmployee(u);
+                else AUTH_REGISTRY = AUTH_REGISTRY.filter(a=>a.employeeId!==u.id);
                 addToast("Usuario eliminado",u.name,"🗑️",T.red);
               }
             }} style={{width:34,height:34,borderRadius:9,background:"rgba(239,68,68,.1)",border:`1px solid rgba(239,68,68,.3)`,fontSize:16,color:T.red,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}}>
@@ -2870,43 +2993,44 @@ function CreateUserModal({close, setUsers, addToast}) {
   const COLORS = ["#6c63ff","#22c55e","#f59e0b","#ec4899","#3b82f6","#14b8a6","#f97316","#ef4444","#a78bfa","#fb923c"];
   const DEPTS = window.__BINET_AREAS__ || ["Tecnología","Marketing","Ventas","RRHH","Finanzas","Operaciones","Legal","Dirección"];
 
-  function save() {
+  async function save() {
     setError("");
     if (!form.name.trim()) { setError("El nombre es requerido"); return; }
     if (!form.username.trim()) { setError("El usuario de acceso es requerido"); return; }
     if (!form.password) { setError("La contraseña es requerida"); return; }
     if (form.password !== form.confirmPass) { setError("Las contraseñas no coinciden"); return; }
-    if (form.password.length < 4) { setError("La contraseña debe tener al menos 4 caracteres"); return; }
-    // Check username not taken
-    const taken = AUTH_REGISTRY.some(a=>a.username.toLowerCase()===form.username.toLowerCase().trim());
-    if (taken) { setError("Ese nombre de usuario ya está en uso"); return; }
+    if (form.password.length < 6) { setError("La contraseña debe tener al menos 6 caracteres para Firebase"); return; }
 
-    const initials = form.name.trim().split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2);
-    const newId = "u_"+Date.now();
-    const newUser = {
-      id: newId,
-      name: form.name.trim(),
-      username: form.username.trim().toLowerCase(),
-      role: form.role,
-      dept: form.dept||"General",
-      avatar: initials,
-      color: form.color,
-      online: false,
-      xp: 0,
-      level: 1,
-      badges: [],
-      yearHistory: [],
-    };
-    setUsers(us=>[...us, newUser]);
-    // Register credentials
-    AUTH_REGISTRY = [...AUTH_REGISTRY, {
-      id: "auth_"+newId,
-      username: form.username.trim().toLowerCase(),
-      password: form.password,
-      employeeId: newId,
-    }];
-    addToast("Usuario creado", `${newUser.name} · @${newUser.username}`, "✅", T.green);
-    close();
+    try {
+      let newUser;
+      if (FIREBASE_READY) {
+        newUser = await firebaseCreateEmployee(form);
+      } else {
+        const taken = AUTH_REGISTRY.some(a=>a.username.toLowerCase()===form.username.toLowerCase().trim());
+        if (taken) { setError("Ese nombre de usuario ya está en uso"); return; }
+        const newId = "u_"+Date.now();
+        newUser = {
+          id: newId,
+          name: form.name.trim(),
+          username: form.username.trim().toLowerCase(),
+          role: form.role,
+          dept: form.dept||"General",
+          avatar: initialsFromName(form.name),
+          color: form.color,
+          online: false,
+          xp: 0,
+          level: 1,
+          badges: [],
+          yearHistory: [],
+        };
+        AUTH_REGISTRY = [...AUTH_REGISTRY, {id:"auth_"+newId,username:newUser.username,password:form.password,employeeId:newId}];
+      }
+      setUsers(us=>[...us.filter(u=>u.id!==newUser.id), newUser]);
+      addToast("Usuario creado", `${newUser.name} · @${newUser.username}`, "✅", T.green);
+      close();
+    } catch(err) {
+      setError(err?.message || "No se pudo crear el usuario");
+    }
   }
 
   return (
@@ -2995,15 +3119,13 @@ function EditUserModal({close, user, setUsers, addToast}) {
   const [newPass, setNewPass] = useState("");
   const [showPass, setShowPass] = useState(false);
 
-  function save() {
-    setUsers(us=>us.map(u=>u.id!==user.id?u:{...form, username:form.username||authEntry?.username||""}));
-    // Update credentials in registry
-    if (authEntry) {
-      AUTH_REGISTRY = AUTH_REGISTRY.map(a=>a.employeeId!==user.id?a:{
-        ...a,
-        username: form.username||a.username,
-        password: newPass.trim()||a.password,
-      });
+  async function save() {
+    const updated = {...form, username:form.username||authEntry?.username||""};
+    setUsers(us=>us.map(u=>u.id!==user.id?u:updated));
+    if (FIREBASE_READY) {
+      await firebaseUpdateEmployee(user.id, updated);
+    } else if (authEntry) {
+      AUTH_REGISTRY = AUTH_REGISTRY.map(a=>a.employeeId!==user.id?a:{...a, username: form.username||a.username, password: newPass.trim()||a.password});
     }
     addToast("Usuario actualizado",form.name,"👤",T.blue);
     close();
